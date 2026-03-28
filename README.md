@@ -1,4 +1,4 @@
-# tcpyVPI # note the capitalization 
+# tcpyVPI
 
 A Python package to calculate the tropical cyclone ventilated Potential Intensity (vPI) and the Genesis Potential Index using vPI (GPIv) from gridded datafiles. 
 
