@@ -1,5 +1,5 @@
 """
-Test script for the ``tcvpigpiv`` package.
+Test script for the ``tcpyVPI`` package.
 
 This script demonstrates how to use the package with both monthly mean
 and hourly ERA5 data. It includes tests for:
@@ -44,9 +44,9 @@ def test_monthly_gpiv():
     print("="*60)
     
     try:
-        from tcvpigpiv import run_vpigpiv
+        from tcpyVPI import run_vpigpiv
     except ImportError:
-        from tcvpigpiv.vpigpiv_module import run_vpigpiv
+        from tcpyVPI.vpigpiv_module import run_vpigpiv
     
     print(f"\nComputing GPIv for {YEAR_MONTHLY:04d}-{MONTH_MONTHLY:02d}...")
     results = run_vpigpiv(YEAR_MONTHLY, MONTH_MONTHLY, data_source='monthly', plot=False)
@@ -68,9 +68,9 @@ def test_hourly_gpiv():
     print("="*60)
     
     try:
-        from tcvpigpiv import run_vpigpiv_hourly
+        from tcpyVPI import run_vpigpiv_hourly
     except ImportError:
-        from tcvpigpiv.vpigpiv_module import run_vpigpiv_hourly
+        from tcpyVPI.vpigpiv_module import run_vpigpiv_hourly
     
     print(f"\nComputing GPIv for {YEAR_HOURLY:04d}-{MONTH_HOURLY:02d}-{DAY_HOURLY:02d} {HOUR_HOURLY:02d}Z...")
     results = run_vpigpiv_hourly(
@@ -95,9 +95,9 @@ def test_data_loading():
     print("="*60)
     
     try:
-        from tcvpigpiv import load_era5_data, load_era5_monthly, load_era5_hourly
+        from tcpyVPI import load_era5_data, load_era5_monthly, load_era5_hourly
     except ImportError:
-        from tcvpigpiv.era5_loader import load_era5_data, load_era5_monthly, load_era5_hourly
+        from tcpyVPI.era5_loader import load_era5_data, load_era5_monthly, load_era5_hourly
     
     # Test monthly loading
     print(f"\nLoading monthly mean data for {YEAR_MONTHLY:04d}-{MONTH_MONTHLY:02d}...")
@@ -129,7 +129,7 @@ def test_individual_components():
     print("="*60)
     
     try:
-        from tcvpigpiv import (
+        from tcpyVPI import (
             load_era5_data,
             calculate_potential_intensity,
             calculate_vws,
@@ -137,8 +137,8 @@ def test_individual_components():
             calculate_etac,
         )
     except ImportError:
-        from tcvpigpiv.era5_loader import load_era5_data
-        from tcvpigpiv.vpigpiv_module import (
+        from tcpyVPI.era5_loader import load_era5_data
+        from tcpyVPI.vpigpiv_module import (
             calculate_potential_intensity,
             calculate_vws,
             calculate_entropy_deficit,
@@ -171,7 +171,7 @@ def test_individual_components():
 def main():
     """Run all tests."""
     print("\n" + "#"*60)
-    print("# tcvpigpiv Package Test Suite")
+    print("# tcpyVPI Package Test Suite")
     print("#"*60)
     
     tests = [
