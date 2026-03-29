@@ -3,7 +3,7 @@ from pathlib import Path
 
 setup(
     name='tcpyVPI',
-    version='0.1.2',
+    version='1.0.0',
     packages=find_packages(),
     install_requires=[
         'numpy',
