@@ -58,14 +58,20 @@ V_SETUP=$(sed -n "s/^ *version='\(.*\)',/\1/p" setup.py | head -1)
 VERSION="$V_INIT"
 ok "version $VERSION (setup.py and __init__.py agree)"
 
+ALREADY_RELEASED=0
 if command -v curl >/dev/null 2>&1; then
   if curl -fsS --max-time 10 "https://pypi.org/pypi/tcpyVPI/${VERSION}/json" >/dev/null 2>&1; then
-    die "version $VERSION is already on PyPI - bump it, or the Action will fail at upload"
+    ALREADY_RELEASED=1
+    warn "version $VERSION is ALREADY on PyPI."
+    echo "         Fine if you are just pushing commits to main. But if you meant to"
+    echo "         cut a new release, bump the version in setup.py AND"
+    echo "         tcpyVPI/__init__.py first, or the Action will fail at upload."
+  else
+    ok "version $VERSION is not yet on PyPI - ready to release"
   fi
-  ok "version $VERSION is not yet on PyPI"
 fi
 
-[[ -z "$MSG" ]] && MSG="Release $VERSION"
+[[ -z "$MSG" ]] && MSG=$([[ $ALREADY_RELEASED == 1 ]] && echo "Update" || echo "Release $VERSION")
 
 # ---------------------------------------------------------------- optional checks
 if [[ $FULL == 1 ]]; then
@@ -109,7 +115,14 @@ git push origin main
 
 # ---------------------------------------------------------------- next steps
 SLUG=$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##')
-cat <<EOF
+if [[ $ALREADY_RELEASED == 1 ]]; then
+  cat <<EOF
+
+${grn}${bold}Pushed to main.${rst} No release cut: $VERSION is already on PyPI.
+To publish a new version, bump setup.py + tcpyVPI/__init__.py and run this again.
+EOF
+else
+  cat <<EOF
 
 ${grn}${bold}Pushed.${rst} PyPI is untouched until you create the Release.
 
@@ -118,3 +131,4 @@ ${grn}${bold}Pushed.${rst} PyPI is untouched until you create the Release.
   2. Publish release -> triggers the Action -> PyPI
   3. Watch: https://github.com/${SLUG}/actions
 EOF
+fi

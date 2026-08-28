@@ -7,6 +7,8 @@ __pycache__/
 Icon?
 .Rhistory
 
-# figures/stats written by github_tests/tcpyVPI_ERA5_from_github.ipynb
+# figures/stats from the comparison notebook, if ever copied into the repo
+# (by default it writes to ~/My Drive/tcpyVPI_figures/, outside the repo)
 github_tests/*.png
 github_tests/*.csv
+*.conflicted-copy*
