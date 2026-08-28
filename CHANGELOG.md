@@ -1,6 +1,55 @@
 # Changelog
 
-All notable changes to tcvpigpiv will be documented in this file.
+All notable changes to tcpyVPI will be documented in this file.
+
+## [1.0.2] - 2026-08-24
+
+### Fixed
+
+**These are results-changing bug fixes. Output from v1.0.1 and earlier should be
+regarded as incorrect and recomputed.** Both bugs were in the inputs handed to
+`tcpyPI.pi()` inside `calculate_potential_intensity()`, so they propagate to
+every downstream quantity: `PI`, `asdeq`, `Chi`, `ventilation_index`, `vPI`,
+and `GPIv`.
+
+- **Surface pressure units.** `tcpyPI.pi()` expects the surface/sea-level
+  pressure in hPa, matching its pressure-level argument, but gridded surface
+  pressure is archived in Pa (ERA5 `SP`, CESM/CAM `PS`) and was being passed
+  through unconverted. Added a `to_hPa()` helper that reads the CF `units`
+  attribute (falling back to a magnitude test when units are absent) and
+  normalises the field. The conversion happens at the point of use, so it
+  covers the ERA5 monthly and hourly loaders, hand-built datasets such as the
+  CESM2 example notebook, and user-supplied data, and is a no-op if the input
+  is already in hPa.
+
+  On an idealised tropical sounding (SST 27 °C, `V_reduc=1.0`) this alone
+  changed PI from 80.5 to 67.1 m/s, roughly a 25% high bias. It also caused
+  `tcpyPI`'s convergence flag to return `IFL=0`, i.e. the values were being
+  flagged as invalid and the flag was not being checked.
+
+- **Specific humidity used as mixing ratio.** `tcpyPI.pi()` expects mixing
+  ratio in g/kg, but specific humidity was being passed as `q * 1000.0`. Now
+  converted with the existing `get_rv_from_q()` helper, consistent with how
+  the 600 hPa moisture is already handled in `calculate_entropy_deficit()`.
+  Worth roughly a further 2% on PI (≤0.35 g/kg on the profile above).
+
+  Combined effect on the same sounding: PI 80.5 → 64.4 m/s.
+
+### Changed
+
+- Corrected the `calculate_entropy_deficit()` docstring, which described a
+  denominator computed from 2 m temperature and dewpoint (and previously
+  925 hPa). The implementation in fact uses the `asdeq` term inverted from the
+  potential intensity; the docstring now documents that, along with the fact
+  that the 600 hPa numerator uses the environmental temperature for both the
+  saturation and actual entropy, and the weak-temperature-gradient argument
+  that justifies substituting it for the eyewall value.
+
+### Notes
+
+- Any stored climatologies or anomaly fields produced with v1.0.1 or earlier
+  must be recomputed; anomalies are not protected by cancellation, since the
+  bias is state-dependent through the sounding.
 
 ## [0.3.0] - 2025-XX-XX
 

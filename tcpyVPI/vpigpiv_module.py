@@ -38,6 +38,47 @@ def get_rv_from_q(q):
     return q / (1.0 - q)
 
 
+def to_hPa(p):
+    """Return a pressure field in hPa, converting from Pa if needed.
+
+    ``tcpyPI.pi`` requires the surface/sea-level pressure and the pressure
+    levels in hPa, but gridded surface pressure is normally archived in Pa
+    (ERA5 ``SP``, CESM/CAM ``PS``).  Units are taken from the CF ``units``
+    attribute when present; otherwise they are inferred from magnitude, since
+    surface pressure is ~1e5 Pa but only ~1e3 hPa.
+
+    Parameters
+    ----------
+    p : xr.DataArray or array-like
+        Pressure field in Pa or hPa.
+
+    Returns
+    -------
+    Same type as ``p``, in hPa.
+    """
+    units = str(getattr(p, 'attrs', {}).get('units', '')).strip().lower()
+    if units in ('pa', 'pascal', 'pascals'):
+        scale = 1.0 / 100.0
+    elif units in ('hpa', 'mb', 'mbar', 'millibar', 'millibars',
+                   'hectopascal', 'hectopascals'):
+        scale = 1.0
+    else:
+        # Unknown/absent units: sample one finite value and infer.
+        sample = np.asarray(p).ravel()
+        sample = sample[np.isfinite(sample)]
+        if sample.size == 0:
+            return p
+        scale = 1.0 / 100.0 if sample[0] > 1200.0 else 1.0
+
+    if scale == 1.0:
+        return p
+    out = p * scale
+    if hasattr(out, 'attrs'):
+        out.attrs = dict(getattr(p, 'attrs', {}))
+        out.attrs['units'] = 'hPa'
+    return out
+
+
 def get_entropy(p, T, rv):
     """Calculates moist entropy.
     
@@ -173,13 +214,15 @@ def calculate_potential_intensity(
     sst_c = ds[sst_var] - 273.15
     sst_k = ds[sst_var]
 
-    # Use surface pressure as provided (Pa) for consistency
-    sp_hpa = ds[sp_var]
+    # tcpyPI.pi expects the surface pressure in hPa, matching the units of the
+    # pressure-level coordinate. Gridded surface pressure is archived in Pa
+    # (ERA5 SP, CAM PS), so convert when needed.
+    sp_hpa = to_hPa(ds[sp_var])
 
     # Convert temperature from Kelvin to Celsius
     t_c = ds[t_var] - 273.15
 
-    # Convert specific humidity to mixing ratio in g/kg
+    # Specific humidity; converted to mixing ratio below
     q = ds[q_var]
 
     # Ensure pressure levels are in descending order (highest pressure first)
@@ -191,7 +234,8 @@ def calculate_potential_intensity(
         level_desc = levels
 
     t_c_desc = t_c.reindex(level=level_desc)
-    q_gkg_desc = (q * 1000.0).reindex(level=level_desc)
+    # tcpyPI.pi expects MIXING RATIO in g/kg, not specific humidity.
+    rv_gkg_desc = (get_rv_from_q(q) * 1000.0).reindex(level=level_desc)
 
     # Apply the potential intensity calculation
     vmax, _, _, To_k, _ = xr.apply_ufunc(
@@ -200,7 +244,7 @@ def calculate_potential_intensity(
         sp_hpa,
         level_desc,
         t_c_desc,
-        q_gkg_desc,
+        rv_gkg_desc,
         kwargs=dict(CKCD=CKCD, ascent_flag=0, diss_flag=1, ptop=50, miss_handle=1, V_reduc=V_reduc),
         input_core_dims=[[], [], ['level'], ['level'], ['level']],
         output_core_dims=[[], [], [], [], []],
@@ -264,32 +308,49 @@ def calculate_entropy_deficit(
     q_var: str = 'Q',
     verbose: bool = True
 ) -> xr.DataArray:
-    """
+    r"""
     Calculate the entropy deficit parameter (Chi).
 
-    The entropy deficit quantifies mid‑level moisture relative to the
-    low‑level inflow.  Following Chavas et al. (2025) we evaluate
+    The entropy deficit quantifies mid-level dryness relative to the air-sea
+    entropy disequilibrium that fuels the storm.  Following Chavas et al.
+    (2025) we evaluate
 
     .. math::
-       \chi = \frac{s^*_m(600) - s_m(600)}{s^*_{\mathrm{SST}} - s_b},
+       \chi_m = \frac{s^*_m(600) - s_m(600)}{s^*_{\mathrm{SST}} - s_b},
 
-    where :math:`s_m` and :math:`s^*_m` are the moist and saturation entropies,
-    respectively.  The numerator uses the 600 hPa level, while the
-    denominator previously used the 925 hPa level.  In this version we use
-    near‑surface (2 m) temperature and dewpoint to characterise the
-    boundary‐layer moist entropy.  The 2 m variables are loaded as
-    ``'T2M'`` (temperature) and ``'D2M'`` (dewpoint) in the data loading
-    routine.  The mixing ratio at 2 m is computed from the dewpoint and
-    surface pressure via the Clausius–Clapeyron relation.
+    where :math:`s_m` and :math:`s^*_m` are the moist and saturation entropies.
+
+    **Numerator.**  Both terms are evaluated at 600 hPa using the *same*
+    environmental temperature from the input dataset, so the numerator is
+    purely a measure of subsaturation of the environmental sounding at that
+    level.  In the theory :math:`s^*_m` is the saturation entropy inside the
+    saturated eyewall; substituting the environmental value is justified by
+    weak temperature gradient balance, since 600 hPa temperature is nearly
+    horizontally uniform in the tropics.  No inner-core sounding is used.
+
+    **Denominator.**  The air-sea entropy disequilibrium is not computed from
+    a boundary-layer parcel here.  It is supplied as ``asdeq``, obtained by
+    inverting the potential intensity in :func:`calculate_potential_intensity`,
+
+    .. math::
+       s^*_{\mathrm{SST}} - s_b = \frac{V_p^2}{C_k/C_d}
+                                  \frac{T_o}{T_s\,(T_s - T_o)},
+
+    with :math:`T_o` the outflow temperature returned by ``tcpyPI``.  This
+    keeps the denominator exactly consistent with the PI used to normalise the
+    ventilation index.  (Earlier revisions computed it from 925 hPa, and then
+    from 2 m temperature and dewpoint; that code is retained below, commented
+    out, for reference.)
 
     Parameters
     ----------
     ds : xr.Dataset
         Dataset with thermodynamic variables.
     asdeq : xr.DataArray
-        Air-sea disequilibrium term from PI calculation.
+        Air-sea entropy disequilibrium term from the PI calculation, J/kg/K.
     sp_var, t_var, q_var : str
         Variable names for surface pressure, temperature, and specific humidity.
+        ``sp_var`` is used only to supply coordinates for the output.
     verbose : bool
         Print progress messages.
 

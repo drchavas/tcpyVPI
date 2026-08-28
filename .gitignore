@@ -1,6 +1,8 @@
 dist/
 build/
 *.egg-info/
+__pycache__/
+*.py[cod]
 .DS_Store
 Icon?
 .Rhistory
