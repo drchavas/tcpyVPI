@@ -6,3 +6,7 @@ __pycache__/
 .DS_Store
 Icon?
 .Rhistory
+
+# figures/stats written by github_tests/tcpyVPI_ERA5_from_github.ipynb
+github_tests/*.png
+github_tests/*.csv
