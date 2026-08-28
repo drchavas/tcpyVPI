@@ -69,8 +69,8 @@ fi
 
 # ---------------------------------------------------------------- optional checks
 if [[ $FULL == 1 ]]; then
-  if [[ -f tests/check_v102_fixes.py ]]; then
-    python3 tests/check_v102_fixes.py || die "regression test failed"
+  if [[ -f tests/check_unit_fixes.py ]]; then
+    python3 tests/check_unit_fixes.py || die "regression test failed"
     ok "regression test passed"
   fi
   if python3 -c "import build, twine" >/dev/null 2>&1; then

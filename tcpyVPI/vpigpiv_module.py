@@ -38,6 +38,72 @@ def get_rv_from_q(q):
     return q / (1.0 - q)
 
 
+def _sample_profile(da):
+    """Cheaply reduce a DataArray to one column by taking index 0 of every
+    non-level dimension. Avoids pulling a whole lazy/remote array into memory
+    just to sanity-check units."""
+    try:
+        sel = {d: 0 for d in da.dims if d != 'level'}
+        return np.asarray(da.isel(**sel).values, dtype=float) if sel else np.asarray(da.values, dtype=float)
+    except Exception:
+        return np.asarray(da.values, dtype=float).ravel()
+
+
+def validate_pi_inputs(sst_c, sp_hpa, levels_hpa, t_c, rv_gkg):
+    """Fail loudly on unit errors in the arguments handed to ``tcpyPI.pi``.
+
+    Every argument below is checked against a range so wide that only a genuine
+    unit mistake can trip it (Pa vs hPa, K vs C, kg/kg vs g/kg). These are the
+    errors that otherwise pass silently and produce a plausible-looking but
+    badly biased potential intensity; see the v1.1.0 entry in CHANGELOG.md.
+
+    Raises
+    ------
+    ValueError
+        With a message naming the suspected unit problem.
+    """
+    def rng(x):
+        a = np.asarray(x, dtype=float)
+        a = a[np.isfinite(a)]
+        return (np.nanmin(a), np.nanmax(a)) if a.size else (np.nan, np.nan)
+
+    lo, hi = rng(levels_hpa)
+    if np.isfinite(hi) and hi > 1200.0:
+        raise ValueError(
+            f"pressure levels look like Pa, not hPa (max {hi:.0f}). "
+            "tcpyPI.pi expects hPa.")
+
+    lo, hi = rng(sp_hpa)
+    if np.isfinite(hi) and (hi > 1200.0 or hi < 300.0):
+        raise ValueError(
+            f"surface pressure out of range for hPa (max {hi:.0f}). "
+            "Expected ~500-1100 hPa; a value near 1e5 means it is still in Pa.")
+
+    lo, hi = rng(sst_c)
+    if np.isfinite(hi) and hi > 100.0:
+        raise ValueError(
+            f"SST looks like Kelvin, not Celsius (max {hi:.1f}). "
+            "tcpyPI.pi expects Celsius.")
+
+    lo, hi = rng(t_c)
+    if np.isfinite(hi) and hi > 100.0:
+        raise ValueError(
+            f"temperature profile looks like Kelvin, not Celsius (max {hi:.1f}). "
+            "tcpyPI.pi expects Celsius.")
+
+    lo, hi = rng(rv_gkg)
+    if np.isfinite(hi):
+        if hi > 100.0:
+            raise ValueError(
+                f"mixing ratio implausibly large (max {hi:.2f} g/kg). "
+                "tcpyPI.pi expects g/kg.")
+        if hi < 0.5:
+            raise ValueError(
+                f"mixing ratio implausibly small (max {hi:.4f} g/kg). "
+                "tcpyPI.pi expects g/kg; a value below ~0.1 means it is still "
+                "in kg/kg, i.e. the *1000 conversion is missing.")
+
+
 def to_hPa(p):
     """Return a pressure field in hPa, converting from Pa if needed.
 
@@ -165,26 +231,29 @@ def calculate_potential_intensity(
     """
     Compute the maximum potential intensity (PI) for each grid point.
 
-    This function follows the logic of the original Colab notebook closely.  The
-    ``tcpyPI.pi`` routine requires:
+    The ``tcpyPI.pi`` routine requires:
 
-    * Sea‑surface temperature (SST) in degrees Celsius;
-    * Surface pressure (MSL) in hectoPascals (hPa); in principle the PI algorithm
-      expects the mean sea-level pressure in hPa, but to reproduce the
-      reference implementation the ERA5 surface pressure (which is in Pa)
-      is passed through without conversion.
-    * A vector of pressure levels in hPa ordered from the lowest model level (highest
-      pressure) to the top of the atmosphere;
+    * Sea-surface temperature (SST) in degrees Celsius;
+    * Surface pressure in hectoPascals (hPa), matching the units of the
+      pressure-level vector;
+    * A vector of pressure levels in hPa ordered from the lowest model level
+      (highest pressure) to the top of the atmosphere;
     * A temperature profile in degrees Celsius ordered consistently with the
       pressure levels;
     * A mixing ratio profile in grams per kilogram (g/kg) ordered consistently
       with the pressure levels.
 
-    The ERA5 inputs are provided in Kelvin for temperature, Pascals for
-    surface pressure, and kg/kg for specific humidity.  The ``level`` coordinate
-    is typically ordered with the smallest value (lowest pressure) first.  To
-    satisfy the ``pi`` requirements we convert the units appropriately and
-    reverse the level order so that index 0 corresponds to the highest pressure.
+    Gridded inputs generally arrive in different units: Kelvin for temperature,
+    Pa for surface pressure (ERA5 ``SP``, CAM ``PS``), and kg/kg of *specific
+    humidity* rather than mixing ratio.  This function converts all of them and
+    reverses the level order so index 0 is the highest pressure.
+
+    .. note::
+       Through v1.0.1 the surface pressure was passed through in Pa without
+       conversion, and specific humidity was passed where mixing ratio was
+       expected.  Both were wrong and biased PI high; see the v1.1.0 entry in
+       CHANGELOG.md.  Inputs are now normalised by :func:`to_hPa` and
+       :func:`get_rv_from_q`, and checked by :func:`validate_pi_inputs`.
 
     Parameters
     ----------
@@ -236,6 +305,16 @@ def calculate_potential_intensity(
     t_c_desc = t_c.reindex(level=level_desc)
     # tcpyPI.pi expects MIXING RATIO in g/kg, not specific humidity.
     rv_gkg_desc = (get_rv_from_q(q) * 1000.0).reindex(level=level_desc)
+
+    # Catch unit errors before they turn into a plausible-looking wrong answer.
+    # Checked on a single sampled column, so this is cheap even for lazy data.
+    validate_pi_inputs(
+        _sample_profile(sst_c),
+        _sample_profile(sp_hpa),
+        np.asarray(level_desc.values, dtype=float),
+        _sample_profile(t_c_desc),
+        _sample_profile(rv_gkg_desc),
+    )
 
     # Apply the potential intensity calculation
     vmax, _, _, To_k, _ = xr.apply_ufunc(

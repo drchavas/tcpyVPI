@@ -1,23 +1,24 @@
-# --- tcpyVPI 1.0.2 fix verification: no data download required ---
+# --- tcpyVPI unit-handling regression check: no data download required ---
 #
-# Run this AFTER installing the local working copy (pip install -e .),
-# not the PyPI release. Confirms:
-#   1. the version actually imported is 1.0.2 from this repo
-#   2. surface pressure in Pa and in hPa now give identical results
-#   3. PI lands in a sane range (v1.0.1 gave ~80.5 m/s here, with IFL=0)
+# Guards the two bugs fixed in v1.1.0, where the inputs handed to tcpyPI.pi()
+# had the wrong units and produced plausible-looking but badly biased output:
+#   1. surface pressure passed in Pa where hPa was expected
+#   2. specific humidity passed where mixing ratio in g/kg was expected
+#
+# Confirms that a dataset giving surface pressure in Pa and one giving it in
+# hPa now produce identical results, and that PI lands in a sane range.
+# Needs no pip install: the repo root goes first on sys.path, which also means
+# it always exercises the working copy rather than an installed release.
 
 import os
 import sys
 
-# Always test the working copy in this repo, never a pip-installed tcpyVPI.
-# Putting the repo root first also guarantees we don't silently test an older
-# release that happens to be installed in the environment.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np, xarray as xr, tcpyVPI
 from tcpyVPI.vpigpiv_module import calculate_potential_intensity, calculate_entropy_deficit
 
-print("tcpyVPI version:", tcpyVPI.__version__, "  <-- must be 1.0.2")
+print("tcpyVPI version:", tcpyVPI.__version__)
 print("loaded from    :", tcpyVPI.__file__)
 
 lev = np.array([1000,975,950,925,900,850,800,750,700,650,600,550,500,
@@ -69,5 +70,16 @@ for lbl, ds in [('SP in Pa ', build(101000., 'Pa')),
 a, b = out['SP in Pa '], out['SP in hPa']
 assert abs(a[0] - b[0]) < 1e-6, "FAIL: Pa and hPa inputs disagree -> to_hPa() not applied"
 assert 55.0 < a[0] < 75.0, f"FAIL: PI={a[0]:.1f} out of sane range (pre-fix gave ~80.5)"
-print("\n  PASS - unit handling is consistent and PI is in the expected range.")
+
+# The input guards should reject the exact mistake that shipped in v1.0.1:
+# surface pressure still in Pa but labelled hPa, so to_hPa() cannot catch it.
+mislabelled = build(101000., 'hPa')
+try:
+    calculate_potential_intensity(mislabelled, V_reduc=1.0, verbose=False)
+    raise AssertionError("FAIL: validate_pi_inputs() did not reject Pa mislabelled as hPa")
+except ValueError as exc:
+    assert 'surface pressure' in str(exc), f"unexpected error: {exc}"
+
+print("\n  PASS - unit handling is consistent, PI is in range, and the input")
+print("         guards reject mislabelled surface pressure.")
 print("  (pre-fix v1.0.1 gave PI = 80.46 m/s with tcpyPI convergence flag IFL=0)")

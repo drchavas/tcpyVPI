@@ -2,7 +2,10 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
-## [1.0.2] - 2026-08-24
+## [1.1.0] - 2026-08-28
+
+Both bugs below were reported independently by Yulian Tang, who spotted them
+while working with the code. Thank you.
 
 ### Fixed
 
@@ -34,6 +37,20 @@ and `GPIv`.
   Worth roughly a further 2% on PI (≤0.35 g/kg on the profile above).
 
   Combined effect on the same sounding: PI 80.5 → 64.4 m/s.
+
+### Added
+
+- `validate_pi_inputs()`, called from `calculate_potential_intensity()` just
+  before `tcpyPI.pi()`. It raises `ValueError` with a message naming the
+  suspected unit problem if surface pressure or the pressure levels look like
+  Pa rather than hPa, if SST or the temperature profile look like Kelvin rather
+  than Celsius, or if the mixing ratio looks like kg/kg rather than g/kg. The
+  thresholds are order-of-magnitude, so only a genuine unit mistake trips them.
+  Checked on a single sampled column, so it stays cheap for lazy/remote data.
+
+  Motivated by the two bugs above: both produced plausible-looking output and
+  survived several releases. This class of error should now fail loudly at the
+  call rather than silently biasing the result.
 
 ### Changed
 
