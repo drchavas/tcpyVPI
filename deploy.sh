@@ -43,11 +43,31 @@ warn() { echo "  ${ylw}warn${rst} $*"; }
 die()  { echo "  ${red}FAIL${rst} $*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- stale lock
-# A crashed git process (or a Drive sync hiccup) leaves .git/index.lock behind
+# A crashed git process (or a cloud-sync hiccup) leaves .git/index.lock behind
 # and every write operation then fails. Safe to clear when no git is running.
 if [[ -f .git/index.lock ]] && ! pgrep -x git >/dev/null 2>&1; then
   warn "clearing stale .git/index.lock"
   [[ $DRY_RUN == 0 ]] && rm -f .git/index.lock
+fi
+
+# ---------------------------------------------------------------- sync litter
+# Google Drive scatters zero-byte "Icon\r" files through every folder, including
+# .git/refs, .git/logs and .git/objects. Git then reports "bad ref for
+# .git/logs/refs/..." and aborts every fetch with "did not send all necessary
+# objects". Dropbox writes "(conflicted copy)" files instead, which are less
+# destructive but still get picked up by `git add .`.
+# Matching is deliberately narrow: only tiny files named exactly Icon<CR>, never
+# real git objects, whose names are 38 hex characters.
+LITTER=$(find .git -type f -name 'Icon*' -size -2k 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$LITTER" != "0" ]]; then
+  warn "removing $LITTER stray cloud-sync file(s) from .git"
+  [[ $DRY_RUN == 0 ]] && find .git -type f -name 'Icon*' -size -2k -delete 2>/dev/null
+fi
+
+CONFLICTS=$(find . -name '*conflicted copy*' -not -path './.git/*' 2>/dev/null | head -5)
+if [[ -n "$CONFLICTS" ]]; then
+  warn "Dropbox conflicted copies present - review before committing:"
+  echo "$CONFLICTS" | sed 's/^/        /'
 fi
 
 # ---------------------------------------------------------------- version guard
