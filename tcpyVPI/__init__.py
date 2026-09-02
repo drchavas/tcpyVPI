@@ -42,7 +42,7 @@ from .climatology import (
     compute_standardized_anomalies,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Dan Chavas, Jose Ocegueda Sanchez"
 
 __all__ = [

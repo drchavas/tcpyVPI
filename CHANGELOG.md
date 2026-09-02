@@ -2,6 +2,68 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.2.0] - 2026-09-02
+
+### Added
+
+Configuration options for the previously hardcoded choices. **Every default
+reproduces v1.1.0 exactly**, so existing code and existing results are
+unchanged; the arguments exist so the choices can be varied for sensitivity
+testing without editing the source.
+
+| Argument | Default | Function |
+| --- | --- | --- |
+| `shear_p_top` | 200 hPa | `calculate_vws` (as `p_top`), `compute_gpiv_from_dataset` |
+| `shear_p_bot` | 850 hPa | `calculate_vws` (as `p_bot`), `compute_gpiv_from_dataset` |
+| `chi_p_mid` | 600 hPa | `calculate_entropy_deficit` (as `p_mid`), `compute_gpiv_from_dataset` |
+| `vort_level` | 850 hPa | `calculate_etac` (as `p_level`), `compute_gpiv_from_dataset` |
+| `vort_cap` | 3.7e-5 s⁻¹ | `calculate_etac`, `compute_gpiv_from_dataset` |
+| `VI_max` | 0.145 | `compute_gpiv_from_dataset` |
+| `gpiv_exponent` | 4.90 | `compute_gpiv_from_dataset` |
+| `CKCD` | 0.9 | `calculate_potential_intensity`, `compute_gpiv_from_dataset` |
+| `ascent_flag` | 0 | `calculate_potential_intensity`, `compute_gpiv_from_dataset` |
+| `diss_flag` | 1 | `calculate_potential_intensity`, `compute_gpiv_from_dataset` |
+| `ptop` | 50 hPa | `calculate_potential_intensity`, `compute_gpiv_from_dataset` |
+
+`run_vpigpiv()` and `run_vpigpiv_hourly()` forward any of these through
+`**params`, e.g. `run_vpigpiv(2022, 9, chi_p_mid=500)`.
+
+Defaults are also available as module constants (`DEFAULT_SHEAR_P_TOP` etc.).
+
+`ptop` is the pressure below which `tcpyPI` ignores the sounding. It also
+interacts with missing data: `tcpyPI` sets the output to missing (`IFL=3`) if
+any level between the lowest valid level and `ptop` is NaN, so raising `ptop`
+can rescue profiles that do not extend cleanly into the stratosphere.
+
+- `tests/check_config_defaults.py` verifies that the defaults are bit-identical
+  to the hardcoded behaviour and that each argument actually propagates.
+
+### Changed
+
+- The mid-level pressure used in the entropy calculation is now derived from
+  `chi_p_mid` rather than being a second independent literal. Through v1.1.0 the
+  level (`sel(level=600)`) and the pressure (`p=60000.` Pa) were separate
+  constants that had to be kept in sync by hand; changing one without the other
+  would have silently evaluated the entropy at the wrong pressure.
+- Level selection now raises a `KeyError` naming the missing level and listing
+  the available ones, instead of a bare xarray error. Selection remains **exact**,
+  not nearest-neighbour, matching all previous versions: a dataset must contain
+  the requested level. Interpolate first if it does not, as the CESM2 example
+  notebook does.
+
+### Notes
+
+- `gpiv_exponent` interacts with the normalising constant 102.1, which was
+  calibrated jointly with the exponent 4.90 by matching the observed global
+  annual mean genesis count. Changing the exponent alone leaves GPIv
+  un-normalised: spatial patterns and relative comparisons remain valid,
+  absolute values do not. The constant is available as `DEFAULT_GPIV_COEFF`
+  if you refit.
+- `calculate_potential_intensity` still defaults to `V_reduc=0.8` while
+  `compute_gpiv_from_dataset` overrides it to 1.0, so calling the former
+  directly gives a PI 20% lower than the pipeline reports. Unchanged from
+  previous versions, but worth knowing.
+
 ## [1.1.0] - 2026-08-28
 
 Both bugs below were reported independently by Yulian Tang, who spotted them
