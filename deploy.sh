@@ -91,7 +91,114 @@ if command -v curl >/dev/null 2>&1; then
   fi
 fi
 
-[[ -z "$MSG" ]] && MSG=$([[ $ALREADY_RELEASED == 1 ]] && echo "Update" || echo "Release $VERSION")
+# ---------------------------------------------------------------- commit message
+# With no argument, build the message from what actually changed:
+#   * new version  -> subject "Release X.Y.Z", body summarising the CHANGELOG
+#                     section for that version
+#   * already out  -> subject "Update", body listing the files touched
+# Pass a message as the first argument to override entirely.
+MSG_FILE=$(mktemp)
+trap 'rm -f "$MSG_FILE"' EXIT
+
+if [[ -n "$MSG" ]]; then
+  printf '%s\n' "$MSG" > "$MSG_FILE"
+else
+  CHANGED_FILES=$(git status --porcelain | awk '{print $NF}' | head -40)
+  VERSION="$VERSION" ALREADY="$ALREADY_RELEASED" FILES="$CHANGED_FILES" \
+  python3 - "$MSG_FILE" <<'PY'
+import os, re, sys, textwrap
+
+out_path = sys.argv[1]
+version  = os.environ['VERSION']
+already  = os.environ['ALREADY'] == '1'
+files    = [f for f in os.environ.get('FILES', '').split('\n') if f.strip()]
+
+def clean(s):
+    s = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', s)   # links -> text
+    s = s.replace('**', '').replace('`', '')
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s.lstrip('-* ').strip()
+
+def summarise(s, limit=100):
+    """First sentence, but keep going if it is just a short bold label."""
+    s = clean(s)
+    parts = re.split(r'(?<=[.;])\s+', s)
+    out = ''
+    for part in parts:
+        cand = (out + ' ' + part).strip()
+        # only stop on length once we already have something substantive,
+        # otherwise a short bold label like "Surface pressure units." wins
+        if out and len(out) >= 45 and len(cand) > limit:
+            break
+        out = cand
+        if len(out) >= 45:
+            break
+    if len(out) > limit:
+        out = out[:limit].rsplit(' ', 1)[0] + '...'
+    return out
+
+def section_items(body, name):
+    """Lead paragraph plus top-level bullets, with wrapped lines joined."""
+    sec = re.search(r'^###\s+' + re.escape(name) + r'\s*$(.*?)(?=^###|\Z)',
+                    body, re.M | re.S)
+    if not sec:
+        return []
+    raw, items, lead, cur = sec.group(1), [], [], None
+    for line in raw.split('\n'):
+        if not line.strip() or line.lstrip().startswith(('|', '#')):
+            if cur:
+                items.append(cur); cur = None
+            continue
+        if re.match(r'^- ', line):                  # new top-level bullet
+            if cur:
+                items.append(cur)
+            cur = line
+        elif cur is not None and line.startswith(('  ', '\t')):
+            cur += ' ' + line.strip()               # continuation of a bullet
+        elif cur is None and not line.startswith(' '):
+            lead.append(line.strip())               # lead paragraph
+    if cur:
+        items.append(cur)
+    out = []
+    if lead:
+        out.append(summarise(' '.join(lead)))
+    out += [summarise(i) for i in items]
+    return [t for t in out if t]
+
+lines = []
+if already:
+    lines.append('Update')
+    if files:
+        lines += ['', 'Files changed:'] + [f'- {f}' for f in files[:8]]
+        if len(files) > 8:
+            lines.append(f'- ...and {len(files)-8} more')
+else:
+    lines.append(f'Release {version}')
+    try:
+        text = open('CHANGELOG.md', encoding='utf-8').read()
+    except OSError:
+        text = ''
+    m = re.search(r'^## \[' + re.escape(version) + r'\].*?$(.*?)(?=^## \[|\Z)',
+                  text, re.M | re.S)
+    if m:
+        body = m.group(1)
+        for name in re.findall(r'^###\s+(.*)$', body, re.M):
+            name = name.strip()
+            if name.lower() == 'notes':
+                continue
+            items = section_items(body, name)
+            if not items:
+                continue
+            lines += ['', f'{name}:']
+            lines += [textwrap.fill(t, width=72, initial_indent='- ',
+                                    subsequent_indent='  ') for t in items[:4]]
+            if len(items) > 4:
+                lines.append(f'- ...and {len(items)-4} more (see CHANGELOG.md)')
+
+open(out_path, 'w', encoding='utf-8').write('\n'.join(lines).strip() + '\n')
+PY
+fi
+MSG=$(head -1 "$MSG_FILE")
 
 # ---------------------------------------------------------------- optional checks
 if [[ $FULL == 1 ]]; then
@@ -118,7 +225,8 @@ if [[ -z "$(git status --porcelain)" ]]; then
   exit 0
 fi
 echo
-echo "  commit message: ${bold}${MSG}${rst}"
+echo "  commit message:"
+sed 's/^/    | /' "$MSG_FILE"
 echo "  push to:        $(git remote get-url origin) (main)"
 
 if [[ $DRY_RUN == 1 ]]; then
@@ -130,7 +238,7 @@ read -r -p "Push to GitHub? [y/N] " REPLY
 [[ "$REPLY" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 
 git add .
-git commit -m "$MSG"
+git commit -F "$MSG_FILE"
 git push origin main
 
 # ---------------------------------------------------------------- next steps
