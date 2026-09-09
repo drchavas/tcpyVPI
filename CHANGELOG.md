@@ -2,6 +2,67 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.3.0] - 2026-09-09
+
+### Fixed
+
+**Results-changing.** `calculate_etac()` returned the capped absolute vorticity
+with its native sign, which broke the Southern Hemisphere in two separate ways
+and also left a smaller defect in the Northern Hemisphere. Anything using `GPIv`
+or `eta_c` outside the NH tropics should be recomputed.
+
+The old line was
+
+```python
+capped = xr.where(np.abs(abs_vo_850) > vort_cap, vort_cap, abs_vo_850)
+```
+
+- **Equatorward of ~14.7 deg S** (where `|f|` first exceeds the 3.7e-5 cap),
+  `eta_c` stayed negative. `GPIv = (102.1 * vPI * eta_c) ** 4.90` raises that
+  negative base to a non-integer power, which is NaN in numpy, so GPIv was blank
+  in a band from the equator to about 15 deg S.
+- **Poleward of ~14.7 deg S**, the magnitude test returned `+vort_cap` for every
+  point regardless of the actual vorticity, saturating the entire rest of the SH
+  at a single constant and erasing its genesis structure.
+- **In the NH**, genuinely anticyclonic points (absolute vorticity < 0) also gave
+  a negative `eta_c` and therefore a NaN GPIv, where zero is the meaningful value.
+
+`eta_c` is now returned **signed and magnitude-clipped**, so it remains the
+physically interpretable field and maps correctly (negative in the SH):
+
+```python
+eta = (vo_850 + f).clip(min=-vort_cap, max=vort_cap)
+```
+
+The hemisphere mirror is applied only where GPIv needs it. `calculate_etac()`
+takes a new `cyclonic=` argument, and `compute_gpiv_from_dataset()` returns both
+fields:
+
+```python
+hemi = xr.where(ds['latitude'] >= 0, 1.0, -1.0)   # not np.sign: sign(0) == 0
+eta  = (hemi * eta).clip(min=0.0, max=vort_cap)   # would zero the equator row
+```
+
+`xr.where(lat >= 0, ...)` rather than `np.sign(lat)` because the ERA5 0.25 deg
+grid contains latitude 0.0 exactly, and `np.sign(0) == 0` would zero the whole
+equator. The lower clip at zero sends anticyclonic points to zero, which is both
+physically right (anticyclonic absolute vorticity should not favour genesis) and
+avoids reintroducing a negative base under the non-integer exponent.
+
+### Added
+
+- `eta_c_cyclonic` in the output of `compute_gpiv_from_dataset()`: the
+  hemisphere-mirrored, zero-clipped vorticity that actually enters GPIv. `eta_c`
+  keeps its true sign for plotting and diagnosis, so both are available.
+- `cyclonic=` keyword on `calculate_etac()`; default `False` returns the signed
+  field.
+
+### Notes
+
+- This changes NH results only at anticyclonic points, where GPIv goes from NaN
+  to 0. NH cyclonic values, which is nearly all of the NH tropics, are unchanged.
+- Reported by an independent review of the Southern Hemisphere behaviour.
+
 ## [1.2.0] - 2026-09-02
 
 ### Added

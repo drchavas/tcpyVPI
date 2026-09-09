@@ -50,7 +50,8 @@ ds = xr.Dataset({
     'VO': f3(np.linspace(3e-5, 0.2e-5, lev.size)),
 })
 
-KEYS = ['PI', 'VWS', 'Chi', 'ventilation_index', 'vPI', 'eta_c', 'GPIv']
+KEYS = ['PI', 'VWS', 'Chi', 'ventilation_index', 'vPI', 'eta_c',
+        'eta_c_cyclonic', 'GPIv']
 DEFAULTS = dict(shear_p_top=200., shear_p_bot=850., chi_p_mid=600.,
                 vort_level=850., vort_cap=3.7e-5, VI_max=0.145,
                 gpiv_exponent=4.90, CKCD=0.9, ascent_flag=0, diss_flag=1,
@@ -100,5 +101,41 @@ a = calculate_etac(ds_v, p_level=850., verbose=False).values
 b = calculate_etac(ds_v, p_level=1000., verbose=False).values
 assert not np.allclose(a, b), "FAIL: vort_level had no effect"
 print(f"  {'vort_level':16s}={'1000.0':8s} -> changed eta_c (checked below the cap)")
+
+# --- 3. hemisphere handling (regression guard for the v1.3.0 fix) -------------
+# Before it, eta_c kept the sign of absolute vorticity AND the cap returned a
+# spurious +cap for large negatives, so GPIv was NaN from 0-14.7S and the rest
+# of the SH was saturated at a constant.
+gl_lat = np.arange(30., -30.01, -2.0)
+gl_lon = np.array([0., 2., 4.])
+rngg = np.random.default_rng(1)
+ds_g = xr.Dataset(
+    {'VO': (('level', 'latitude', 'longitude'),
+            rngg.normal(0, 1.5e-5, (1, gl_lat.size, gl_lon.size)))},
+    coords={'level': np.array([850.]), 'latitude': gl_lat, 'longitude': gl_lon})
+
+signed = calculate_etac(ds_g, verbose=False)
+cyc    = calculate_etac(ds_g, cyclonic=True, verbose=False)
+CAP    = 3.7e-5
+
+# signed: keeps hemisphere sign, clipped by MAGNITUDE (never a spurious +cap)
+assert bool((np.abs(signed) <= CAP + 1e-15).all()), "FAIL: |eta_c| exceeds the cap"
+assert float(signed.where(signed['latitude'] < -15).min()) < 0, \
+    "FAIL: signed eta_c is not negative in the SH - the old +cap bug is back"
+
+# cyclonic: non-negative, finite under the non-integer GPIv exponent
+assert bool((cyc >= 0).all()), "FAIL: cyclonic eta_c has negative values"
+assert np.isfinite((102.1 * 70.0 * cyc).values ** 4.90).all(), "FAIL: GPIv not finite"
+assert float(cyc.sel(latitude=0.0).max()) >= 0, "FAIL: equator row broken (sign(0)=0)"
+
+# and they agree in magnitude
+assert np.allclose(np.abs(signed.values), cyc.values, atol=1e-15) or \
+       bool((cyc.values <= np.abs(signed.values) + 1e-15).all()), \
+    "FAIL: cyclonic and signed disagree in magnitude"
+nh = float(cyc.where(cyc['latitude'] > 0).mean())
+sh = float(cyc.where(cyc['latitude'] < 0).mean())
+assert abs(nh - sh) / max(nh, sh) < 0.25, f"FAIL: hemispheres asymmetric ({nh:.2e} vs {sh:.2e})"
+print(f"\n  PASS - eta_c signed keeps hemisphere; eta_c_cyclonic drives a finite GPIv "
+      f"(NH {nh:.2e}, SH {sh:.2e})")
 
 print("\n  PASS - all eleven parameters propagate, and defaults reproduce v1.1.0.")

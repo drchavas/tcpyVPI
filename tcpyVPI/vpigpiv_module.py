@@ -569,6 +569,7 @@ def calculate_etac(
     vo_var: str = 'VO',
     p_level: float = DEFAULT_VORT_LEVEL,
     vort_cap: float = DEFAULT_VORT_CAP,
+    cyclonic: bool = False,
     verbose: bool = True
 ) -> xr.DataArray:
     """
@@ -583,16 +584,26 @@ def calculate_etac(
     p_level : float
         Pressure level of the relative vorticity, hPa. Default 850.
     vort_cap : float
-        Upper bound on the absolute vorticity, s^-1. Default 3.7e-5, following
-        Tippett et al. (2011); represents a threshold of "sufficient" background
-        rotation above which further rotation does not promote genesis.
+        Upper bound on the magnitude of the absolute vorticity, s^-1. Default
+        3.7e-5, following Tippett et al. (2011); represents a threshold of
+        "sufficient" background rotation above which further rotation does not
+        promote genesis.
+    cyclonic : bool
+        If False (default) return the SIGNED absolute vorticity, clipped to
+        [-vort_cap, +vort_cap]. This is the physically interpretable field:
+        negative in the Southern Hemisphere, so it can be mapped directly.
+
+        If True, mirror the hemispheres so cyclonic rotation is positive
+        everywhere and clip anticyclonic values to zero. This is the form GPIv
+        requires, since it raises eta_c to a non-integer power.
+        :func:`compute_gpiv_from_dataset` returns both.
     verbose : bool
         Print progress messages.
 
     Returns
     -------
     xr.DataArray
-        Capped absolute vorticity at ``p_level``.
+        Capped absolute vorticity at ``p_level``, signed or cyclonic-positive.
     """
     if verbose:
         print(f"  Calculating Capped Vorticity (eta_c, {p_level:g} hPa)...")
@@ -603,18 +614,28 @@ def calculate_etac(
     omega = 2 * np.pi / (24 * 3600)
     f = 2 * omega * np.sin(np.deg2rad(ds['latitude']))
 
-    # Absolute vorticity
-    abs_vo_850 = vo_850 + f
+    # Absolute vorticity, clipped by MAGNITUDE with the sign preserved. Through
+    # v1.2.0 this was `where(|eta| > cap, +cap, eta)`, which returned a positive
+    # +cap for large-magnitude NEGATIVE values, saturating the Southern
+    # Hemisphere poleward of ~14.7 deg S at a constant and erasing its structure.
+    eta = (vo_850 + f).clip(min=-vort_cap, max=vort_cap)
 
-    # Cap the absolute vorticity as in the original script. When the magnitude
-    # exceeds the cap, we set the value to +vort_cap rather than preserving the
-    # sign. For magnitudes below the cap we keep the signed absolute vorticity.
-    capped = xr.where(np.abs(abs_vo_850) > vort_cap, vort_cap, abs_vo_850)
-    capped.attrs = {
-        'long_name': f'Capped {p_level:g} hPa Absolute Vorticity',
+    if cyclonic:
+        # Mirror so that cyclonic is positive in both hemispheres, then clip
+        # anticyclonic points to zero. This is the form GPIv needs: it raises
+        # eta_c to a non-integer power, so a negative base would be NaN, and
+        # anticyclonic absolute vorticity should not favour genesis anyway.
+        # xr.where rather than np.sign, because np.sign(0) == 0 would zero the
+        # whole equator row and the ERA5 0.25 deg grid contains latitude 0.0.
+        hemi = xr.where(ds['latitude'] >= 0, 1.0, -1.0)
+        eta = (hemi * eta).clip(min=0.0, max=vort_cap)
+
+    eta.attrs = {
+        'long_name': f'Capped {p_level:g} hPa Absolute Vorticity'
+                     + (' (cyclonic-positive)' if cyclonic else ' (signed)'),
         'units': 's**-1'
     }
-    return capped
+    return eta
 
 
 def compute_gpiv_from_dataset(
@@ -704,8 +725,12 @@ def compute_gpiv_from_dataset(
                         p_top=shear_p_top, p_bot=shear_p_bot, verbose=verbose)
     Chi = calculate_entropy_deficit(ds, asdeq, sp_var, t_var, q_var,
                                     p_mid=chi_p_mid, verbose=verbose)
-    eta_c = calculate_etac(ds, vo_var,
-                           p_level=vort_level, vort_cap=vort_cap, verbose=verbose)
+    # eta_c is returned signed (physically interpretable, mappable); GPIv needs
+    # the cyclonic-positive form. Both are saved.
+    eta_c = calculate_etac(ds, vo_var, p_level=vort_level, vort_cap=vort_cap,
+                           cyclonic=False, verbose=verbose)
+    eta_c_cyclonic = calculate_etac(ds, vo_var, p_level=vort_level,
+                                    vort_cap=vort_cap, cyclonic=True, verbose=False)
     
     # Combine components
     if verbose:
@@ -742,7 +767,7 @@ def compute_gpiv_from_dataset(
 
     # The formula from the paper. Note DEFAULT_GPIV_COEFF is calibrated jointly
     # with the default exponent; see the gpiv_exponent warning in the docstring.
-    GPIv = (DEFAULT_GPIV_COEFF * vPI * eta_c)**gpiv_exponent * cos_lat * dx * dy
+    GPIv = (DEFAULT_GPIV_COEFF * vPI * eta_c_cyclonic)**gpiv_exponent * cos_lat * dx * dy
     GPIv.attrs = {'long_name': 'Ventilated Genesis Potential Index', 'units': ''}
     
     # Assemble results into a single dataset
@@ -754,6 +779,7 @@ def compute_gpiv_from_dataset(
         'VWS': VWS,
         'Chi': Chi,
         'eta_c': eta_c,
+        'eta_c_cyclonic': eta_c_cyclonic,
     })
     
     return results_ds
