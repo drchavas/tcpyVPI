@@ -54,6 +54,9 @@ DEFAULT_CKCD        = 0.9       # ratio of enthalpy to momentum exchange coeffic
 DEFAULT_ASCENT_FLAG = 0         # tcpyPI: 0 = reversible, 1 = pseudo-adiabatic
 DEFAULT_DISS_FLAG   = 1         # tcpyPI: 1 = dissipative heating allowed
 DEFAULT_PTOP        = 50.0      # hPa, sounding above this level is ignored
+EARTH_OMEGA         = 7.292e-5  # s^-1, Earth's rotation rate, as in Chavas et
+                                # al. (2025). NOT 2*pi/86400: that is the solar
+                                # day and gives an Omega 0.27% low.
 
 
 def _sel_level(da, level, what):
@@ -611,8 +614,7 @@ def calculate_etac(
     vo_850 = _sel_level(ds[vo_var], p_level, 'vorticity')
 
     # Coriolis parameter
-    omega = 2 * np.pi / (24 * 3600)
-    f = 2 * omega * np.sin(np.deg2rad(ds['latitude']))
+    f = 2 * EARTH_OMEGA * np.sin(np.deg2rad(ds['latitude']))
 
     # Absolute vorticity, clipped by MAGNITUDE with the sign preserved. Through
     # v1.2.0 this was `where(|eta| > cap, +cap, eta)`, which returned a positive

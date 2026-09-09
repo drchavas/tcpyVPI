@@ -140,7 +140,7 @@ previously hardcoded can be overridden for sensitivity testing:
 | `shear_p_bot` | 850 hPa | bottom of the bulk shear layer |
 | `chi_p_mid` | 600 hPa | mid-level for the entropy deficit |
 | `vort_level` | 850 hPa | level of the relative vorticity |
-| `vort_cap` | 3.7e-5 s⁻¹ | cap on absolute vorticity |
+| `vort_cap` | 3.7e-5 s⁻¹ | cap on the magnitude of absolute vorticity |
 | `VI_max` | 0.145 | ventilation index above which vPI = 0 |
 | `gpiv_exponent` | 4.90 | exponent in `GPIv = (102.1 · vPI · η_c)^a` |
 | `CKCD` | 0.9 | ratio C_k/C_d, passed to tcpyPI |
@@ -197,8 +197,33 @@ The main computation returns a dataset with:
 | `PI` | Potential Intensity | m/s |
 | `VWS` | Vertical Wind Shear (200-850 hPa) | m/s |
 | `Chi` | Entropy Deficit | - |
-| `eta_c` | Capped Absolute Vorticity (850 hPa) | s⁻¹ |
+| `eta_c` | Capped absolute vorticity (850 hPa), **signed** | s⁻¹ |
+| `eta_c_cyclonic` | Same, hemisphere-mirrored and clipped at zero — the form GPIv uses | s⁻¹ |
 | `ventilation_index` | Ventilation Index | - |
+
+### A note on `eta_c`
+
+Two vorticity fields are returned, and the difference matters if you plot or
+analyse them:
+
+- **`eta_c`** is the *signed* absolute vorticity, clipped by magnitude to
+  ±`vort_cap`. It is **negative in the Southern Hemisphere**, which is physically
+  correct and is what you want on a map.
+- **`eta_c_cyclonic`** mirrors the hemispheres so cyclonic rotation is positive
+  everywhere, then clips anticyclonic values to zero. **This is the field GPIv is
+  built from**, because GPIv raises it to a non-integer power (4.90) and a
+  negative base would be NaN.
+
+`calculate_etac()` returns the signed form by default; pass `cyclonic=True` for
+the mirrored one.
+
+```python
+eta_signed   = calculate_etac(ds)                  # negative in the SH
+eta_cyclonic = calculate_etac(ds, cyclonic=True)   # non-negative everywhere
+```
+
+Through v1.2.0 there was only one field and it was wrong in the SH; see the
+v1.3.0 entry in [CHANGELOG.md](CHANGELOG.md).
 
 When computing anomalies, additional fields are added:
 - `*_anom`: Anomaly fields

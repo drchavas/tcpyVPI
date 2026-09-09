@@ -49,6 +49,17 @@ equator. The lower clip at zero sends anticyclonic points to zero, which is both
 physically right (anticyclonic absolute vorticity should not favour genesis) and
 avoids reintroducing a negative base under the non-integer exponent.
 
+**Earth's rotation rate.** `calculate_etac()` used `omega = 2*np.pi/(24*3600)`
+= 7.2722e-5 s⁻¹, which is the **solar** day. Chavas et al. (2025) specify
+Ω = 7.292e-5 s⁻¹, so `f` was 0.271% low everywhere. Now `EARTH_OMEGA = 7.292e-5`,
+matching the paper.
+
+This mattered less before only because the old magnitude test pinned `eta_c` to
+the cap poleward of ~14.7°, hiding the error there. Sub-cap values passed through
+untouched then and still do, and since `GPIv` goes as `eta_c**4.90` the bias was
+worth about 1.3% on sub-cap GPIv. The latitude at which the cap engages moves
+from 14.738° to 14.697°.
+
 ### Added
 
 - `eta_c_cyclonic` in the output of `compute_gpiv_from_dataset()`: the
