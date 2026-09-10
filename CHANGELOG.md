@@ -74,15 +74,21 @@ where the mean silently produced a wrong number.
 ### Notes
 
 - **The area term makes sums grid-consistent, not resolution-invariant.** The
-  coefficient and exponent were fit on 2° fields, and GPIv goes as roughly the
-  fifth power of `vPI · η_c`. That is strongly convex, so by Jensen's inequality
-  evaluating GPIv on fine-grid fields and summing gives a systematically larger
-  total than evaluating it on the same fields averaged to 2°: the fine grid
-  resolves peaks that 2° averaging smooths, and the exponent amplifies them. On
-  synthetic fields, ~1.1× for 15% sub-2° variability in `vPI · η_c`, ~1.4× for
-  40%, always in the same direction. `run_vpigpiv()` loads native 0.25° ERA5, so
-  it is off-calibration by default; coarsen to 2° to compare against published
-  values.
+  coefficient and exponent were fit on 2° fields, and off that grid there are two
+  distinct effects pointing in **opposite** directions:
+  - *Per-gridbox values scale with gridbox area.* GPIv is per unit gridbox area,
+    so a 0.25° value is ~1/64 of the 2° value at the same point — finer grid,
+    **lower** pointwise values. This is the `dx · dy` factor working correctly.
+  - *Sums run high.* GPIv goes as roughly the fifth power of `vPI · η_c` and is
+    therefore convex, so by Jensen's inequality a finer grid resolves peaks that
+    2° averaging smooths, and the exponent amplifies them — finer grid,
+    **higher** totals. The size is set by the coefficient of variation `c` of
+    sub-2° variability *within* a 2° box (between-box variance survives
+    coarsening and cancels), roughly `1 + p(p−1)c²/2` with `p = 4.90`: ~1.2× at
+    `c = 0.15`, 2.5–4× at `c = 0.40` depending on tail weight.
+
+  `run_vpigpiv()` loads native 0.25° ERA5, so it is off-calibration by default;
+  coarsen to 2° to compare against published values.
 
   Before this release the 64× inflation made any grid mismatch obvious. Removing
   it removes that accidental signal, so the grid is now recorded explicitly

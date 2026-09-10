@@ -1,5 +1,5 @@
 """
-ERA5 data loader for the tcvpigpiv package.
+ERA5 data loader for the tcpyVPI package.
 
 This module provides functions to load ERA5 reanalysis data from NCAR RDA
 THREDDS servers for both monthly mean (d633001) and hourly (d633000) datasets.

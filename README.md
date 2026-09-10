@@ -233,14 +233,36 @@ The area weighting is correct at any uniform spacing, so GPIv **sums are
 grid-consistent**. That is not the same as being resolution-independent, and the
 distinction matters if you compare totals against Chavas et al. (2025).
 
-The coefficient 102.1 and exponent 4.90 were fit on 2° fields. GPIv goes as
-roughly the fifth power of `vPI · η_c`, which is strongly convex, so by Jensen's
-inequality evaluating it on fine-grid fields and summing gives a systematically
-**larger** total than evaluating it on the same fields averaged to 2°: the fine
-grid resolves `vPI` and `η_c` peaks that 2° averaging smooths, and the exponent
-amplifies them. On synthetic fields the effect is roughly 1.1× for 15%
-sub-2° variability in `vPI · η_c` and 1.4× for 40%. It is one-directional —
-finer always runs higher.
+The coefficient 102.1 and exponent 4.90 were fit on 2° fields. Off that grid
+there are **two distinct effects, pointing in opposite directions**:
+
+**1. Per-gridbox values scale with gridbox area.** GPIv is defined per unit
+gridbox area, so a 0.25° value is ~1/64 of the 2° value at the same location —
+finer grid, *lower* pointwise values. This is the `dx · dy` factor doing its job,
+and it is the reason a 0.25° GPIv map will not match a published colorbar.
+
+**2. Sums run high.** GPIv goes as roughly the fifth power of `vPI · η_c`, which
+is convex, so by Jensen's inequality evaluating it on fine-grid fields and
+summing gives a systematically **larger** total than evaluating it on the same
+fields averaged to 2°: the fine grid resolves peaks that 2° averaging smooths,
+and the exponent amplifies them.
+
+The size of effect 2 is set by the coefficient of variation `c` of the sub-2°
+variability of `vPI · η_c` **within** a 2° box — not the total variance of the
+field, since between-box variance survives the coarsening and cancels. To second
+order the ratio is `1 + p(p−1)c²/2` with `p = 4.90`, i.e. `1 + 9.56 c²`:
+
+| within-box CV `c` | Gaussian | lognormal | `1 + 9.56 c²` |
+|---|---|---|---|
+| 0.10 | 1.10× | 1.10× | 1.10× |
+| 0.15 | 1.22× | 1.24× | 1.21× |
+| 0.25 | 1.65× | 1.78× | 1.60× |
+| 0.40 | 2.86× | 4.13× | 2.53× |
+
+It is one-directional — finer always sums higher — and it grows fast, so at
+realistic sub-2° variability this is a factor-of-2-or-more correction, not a
+rounding error. The spread between the columns is the tail sensitivity: the
+heavier the distribution of `vPI · η_c`, the larger the effect.
 
 `run_vpigpiv()` loads **native 0.25° ERA5**, so its output is off-calibration by
 default. **Coarsen to 2° to reproduce or compare against published values.**

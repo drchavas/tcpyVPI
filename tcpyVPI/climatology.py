@@ -1,5 +1,5 @@
 """
-Climatology computation module for tcvpigpiv.
+Climatology computation module for tcpyVPI.
 
 This module provides functions for computing monthly climatologies of
 potential intensity (PI), ventilated PI (vPI), GPIv, and their components.
@@ -63,7 +63,7 @@ def compute_monthly_climatology(
         
     Examples
     --------
-    >>> from tcvpigpiv.vpigpiv_module import compute_gpiv_from_dataset
+    >>> from tcpyVPI.vpigpiv_module import compute_gpiv_from_dataset
     >>> clim = compute_monthly_climatology(
     ...     compute_gpiv_from_dataset,
     ...     years=range(2000, 2020),

@@ -738,14 +738,25 @@ def compute_gpiv_from_dataset(
        **GPIv is calibrated for 2x2 deg fields, and is not resolution-
        invariant.** The area term is correct at any uniform spacing, so sums are
        grid-*consistent*, but the coefficient 102.1 and exponent 4.90 were fit
-       on 2 deg data. Because GPIv goes as roughly the 5th power of
-       ``vPI * eta_c``, it is strongly convex, so by Jensen's inequality
-       evaluating it on fine-grid fields and summing gives a systematically
-       larger total than evaluating it on 2 deg-averaged fields: a fine grid
-       resolves vPI and eta_c peaks that 2 deg averaging smooths, and the
-       exponent amplifies them. Coarsen to 2 deg to reproduce or compare against
-       published values. The grid actually used is recorded in the output
-       attributes ``grid_dx_deg``, ``grid_dy_deg`` and ``calibration_grid_deg``.
+       on 2 deg data. Off that grid the mismatch has two parts, which go in
+       OPPOSITE directions:
+
+       1. *Per-gridbox values scale with gridbox area.* GPIv is defined per unit
+          gridbox area, so a 0.25 deg value is ~1/64 of the 2 deg value at the
+          same location. Finer grid, LOWER pointwise values.
+       2. *Sums run high.* GPIv goes as roughly the 5th power of
+          ``vPI * eta_c`` and is therefore convex, so by Jensen's inequality a
+          finer grid resolves peaks that 2 deg averaging smooths away and the
+          exponent amplifies them. Finer grid, HIGHER totals.
+
+       The size of (2) depends on the coefficient of variation ``c`` of the
+       sub-2 deg variability of ``vPI * eta_c`` WITHIN a 2 deg box, roughly as
+       ``1 + p(p-1)c**2/2`` with ``p = 4.90``: about 1.2x at c = 0.15 and
+       2.5-4x at c = 0.40, the upper end for a heavier-tailed distribution.
+
+       Coarsen to 2 deg to reproduce or compare against published values. The
+       grid actually used is recorded in the output attributes ``grid_dx_deg``,
+       ``grid_dy_deg``, ``calibration_grid_deg`` and ``calibrated``.
 
     Parameters
     ----------
@@ -856,12 +867,15 @@ def compute_gpiv_from_dataset(
     dy = _spacing_deg(ds['latitude'], 'latitude')
     off_calibration = abs(dx - CALIBRATION_GRID_DEG) > 0.01 or abs(dy - CALIBRATION_GRID_DEG) > 0.01
     if verbose:
-        print(f"  Grid spacing: dx={dx:g} deg, dy={dy:g} deg"
-              + (f"  (calibration grid is {CALIBRATION_GRID_DEG:g} deg; absolute "
-                 f"GPIv is not comparable to Chavas et al. 2025 because GPIv is "
-                 f"defined per unit gridbox area so will differ by factor "
-                 f"difference in gridbox area)"
-                 if off_calibration else ""))
+        print(f"  Grid spacing: dx={dx:g} deg, dy={dy:g} deg")
+        if off_calibration:
+            area_ratio = (dx * dy) / CALIBRATION_GRID_DEG**2
+            print(f"    NOTE: calibration grid is {CALIBRATION_GRID_DEG:g} deg; absolute GPIv is not "
+                  f"comparable to Chavas et al. 2025.")
+            print(f"          Per-gridbox GPIv is defined per unit gridbox area, so it differs by "
+                  f"the ratio of gridbox areas ({area_ratio:.3g}x here).")
+            print(f"          Sums additionally run HIGH, because GPIv is a ~{gpiv_exponent:g} power "
+                  f"and a finer grid resolves peaks that {CALIBRATION_GRID_DEG:g} deg averaging smooths.")
     # The formula from the paper. Note DEFAULT_GPIV_COEFF is calibrated jointly
     # with the default exponent; see the gpiv_exponent warning in the docstring.
     GPIv = (DEFAULT_GPIV_COEFF * vPI * eta_c_cyclonic)**gpiv_exponent * cos_lat * dx * dy
@@ -881,9 +895,14 @@ def compute_gpiv_from_dataset(
             f'Computed on a {dx:g} x {dy:g} deg grid. The coefficient '
             f'{DEFAULT_GPIV_COEFF:g} and exponent {gpiv_exponent:g} were calibrated on '
             f'{CALIBRATION_GRID_DEG:g} deg fields. The grid-box area term is correct at '
-            f'any uniform spacing, but GPIv is a ~5th power and therefore not '
-            f'resolution-invariant: absolute values and sums from a finer grid run '
-            f'systematically high relative to the published calibration. Coarsen to '
+            f'any uniform spacing, but GPIv is not resolution-invariant, in two '
+            f'separate ways. (1) Per-gridbox values are defined per unit gridbox area, '
+            f'so they scale with that area: they are '
+            f'{(dx * dy) / CALIBRATION_GRID_DEG**2:.3g}x the equivalent '
+            f'{CALIBRATION_GRID_DEG:g} deg values, i.e. LOWER on a finer grid. (2) Sums '
+            f'run systematically HIGH, because GPIv is a ~{gpiv_exponent:g} power and so '
+            f'convex: by Jensen inequality a finer grid resolves vPI and eta_c peaks that '
+            f'{CALIBRATION_GRID_DEG:g} deg averaging smooths away. Coarsen to '
             f'{CALIBRATION_GRID_DEG:g} deg to compare against Chavas et al. (2025).'
         ) if off_calibration else (
             f'Computed on the {CALIBRATION_GRID_DEG:g} deg calibration grid of '
