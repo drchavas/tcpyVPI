@@ -205,13 +205,27 @@ The main computation returns a dataset with:
 
 **The code assumes a regular, fixed-spacing latitude–longitude grid.** The GPIv
 grid-box area term is `cos(lat) · Δlon · Δlat`, and `Δlon` and `Δlat` are
-computed internally as the **mean spacing** of the `longitude` and `latitude`
+computed internally as the **median spacing** of the `longitude` and `latitude`
 coordinates of your input data. They are constants, evaluated once per call.
 
 If you have a variable-resolution grid, an irregular grid, or anything that is
-not a plain lat–lon mesh, that mean is not meaningful. **Interpolate your data
-onto a fixed-spacing grid first** — 2° × 2° matches the published calibration —
-or modify the code to compute the area term appropriately for your grid.
+not a plain lat–lon mesh, that single constant is not meaningful. **Interpolate
+your data onto a fixed-spacing grid first** — 2° × 2° matches the published
+calibration — or modify the code to compute the area term appropriately for your
+grid. A `RuntimeWarning` is raised if the spacing varies by more than 1%; it is
+silent on a regular grid at any resolution.
+
+Two input shapes are rejected outright, with a `ValueError`, because they used to
+produce a finite but meaningless number:
+
+- **A collapsed coordinate**, e.g. after `ds.sel(latitude=0.5)` — a natural thing
+  to do when checking a single location. The coordinate is then 0-d, and taking
+  its difference returns the latitude itself, so `Δlat` silently became 0.5.
+- **A single-point coordinate**, which has no spacing to measure.
+
+Rolled or re-centred longitudes (`0…179.75` then `-180…-0.25`) are handled
+correctly: longitude differences are unwrapped onto (−180°, 180°], so the ±360°
+seam does not distort `Δlon`.
 
 The area weighting is correct at any uniform spacing. Note separately that the
 GPIv coefficient and exponent were calibrated on 2° fields, so GPIv computed on a

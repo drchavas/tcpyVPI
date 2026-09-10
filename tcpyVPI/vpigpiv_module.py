@@ -24,6 +24,8 @@ Authors:
 from typing import Optional, Literal, Union
 from pathlib import Path
 
+import warnings
+
 import xarray as xr
 import numpy as np
 import tcpyPI
@@ -640,6 +642,64 @@ def calculate_etac(
     return eta
 
 
+def _spacing_deg(coord: xr.DataArray, name: str, wrap: bool = False) -> float:
+    """Grid spacing of a 1-D lat/lon coordinate, in degrees.
+
+    The MEDIAN of the absolute differences, not the mean. On a clean grid the
+    two agree exactly; the median is additionally immune to a single bad gap,
+    which the mean is not. Degenerate coordinates raise rather than returning a
+    plausible-looking wrong number.
+
+    Parameters
+    ----------
+    coord : xr.DataArray
+        The coordinate, e.g. ``ds['longitude']``.
+    name : str
+        Coordinate name, used in error messages.
+    wrap : bool
+        If True (longitude), unwrap differences onto (-180, 180] so that a
+        rolled or re-centred coordinate -- 0..179.75 followed by -180..-0.25,
+        which is what some ERA5 subsetting and ``Dataset.roll`` produce -- gives
+        the true spacing rather than being corrupted by the ~360 deg step.
+
+    Raises
+    ------
+    ValueError
+        If the coordinate is not 1-D with at least two points. In particular a
+        0-d coordinate, which is what ``ds.sel(latitude=0.5)`` leaves behind,
+        would otherwise pass silently: ``DataArray.diff()`` on a 0-d array
+        returns the value itself, so the spacing would come back as the
+        LATITUDE, finite and entirely wrong.
+    """
+    v = np.asarray(coord.values, dtype=float)
+    if v.ndim != 1 or v.size < 2:
+        raise ValueError(
+            f"The GPIv grid-box area term needs a 1-D '{name}' coordinate with at "
+            f"least 2 points, but '{name}' has ndim={v.ndim}, size={v.size}. "
+            f"This usually means the grid was collapsed by a point selection "
+            f"(e.g. .sel({name}=...) without a slice). Pass the full grid, or "
+            f"compute the area term yourself."
+        )
+    d = np.diff(v)
+    if wrap:
+        d = (d + 180.0) % 360.0 - 180.0
+    d = np.abs(d)
+    spacing = float(np.median(d))
+    if spacing <= 0 or not np.isfinite(spacing):
+        raise ValueError(f"Non-finite or zero '{name}' spacing ({spacing}); "
+                         f"the '{name}' coordinate has duplicate or invalid values.")
+    if np.ptp(d) > 0.01 * spacing:
+        warnings.warn(
+            f"The '{name}' coordinate is not uniformly spaced (spacing ranges "
+            f"{d.min():g} to {d.max():g} deg, median {spacing:g}). GPIv weights "
+            f"every grid box by a single constant spacing, so the area term is "
+            f"wrong on a variable-resolution grid. Interpolate onto a "
+            f"fixed-spacing grid first, or compute the area term yourself.",
+            RuntimeWarning, stacklevel=3,
+        )
+    return spacing
+
+
 def compute_gpiv_from_dataset(
     ds: xr.Dataset,
     verbose: bool = True,
@@ -778,8 +838,8 @@ def compute_gpiv_from_dataset(
     # native 0.25 deg ERA5, which is what run_vpigpiv() loads, every box was
     # weighted as though it were 2x2 deg, inflating GPIv by (2/0.25)**2 = 64.
     # Now measured from the coordinates, assuming uniform spacing.
-    dx = float(np.abs(ds['longitude'].diff('longitude').mean()))
-    dy = float(np.abs(ds['latitude'].diff('latitude').mean()))
+    dx = _spacing_deg(ds['longitude'], 'longitude', wrap=True)
+    dy = _spacing_deg(ds['latitude'], 'latitude')
     if verbose:
         print(f"  Grid spacing: dx={dx:g} deg, dy={dy:g} deg")
     # The formula from the paper. Note DEFAULT_GPIV_COEFF is calibrated jointly

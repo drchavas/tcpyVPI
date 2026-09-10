@@ -20,11 +20,12 @@ assumption about the caller's grid rather than a property of the data. Since
 `run_vpigpiv()` loads **native 0.25° ERA5**, every grid box was weighted as
 though it were 2° × 2°, inflating GPIv by (2/0.25)² = **64×**.
 
-`dx` and `dy` are now measured from the coordinates:
+`dx` and `dy` are now measured from the coordinates, as the **median** of the
+absolute coordinate differences:
 
 ```python
-dx = float(np.abs(ds['longitude'].diff('longitude').mean()))
-dy = float(np.abs(ds['latitude'].diff('latitude').mean()))
+dx = _spacing_deg(ds['longitude'], 'longitude', wrap=True)
+dy = _spacing_deg(ds['latitude'], 'latitude')
 ```
 
 The spatial pattern was never affected — the area term is a constant multiplier —
@@ -37,12 +38,41 @@ but absolute GPIv values and any global or basin **sum** were wrong off a 2° gr
 | 0.5° | 16× too high | corrected |
 | 0.25° | 64× too high | corrected |
 
+### Grid-spacing detection
+
+The spacing is the **median** of `|diff(coordinate)|`, with three guards. On a
+clean grid the median and the mean agree exactly; the differences appear only
+where the mean silently produced a wrong number.
+
+- **Median, not mean.** The mean is corrupted by a single anomalous gap. The
+  case that matters is a rolled or re-centred longitude — `0…179.75` followed by
+  `-180…-0.25`, which some ERA5 subsetting and `Dataset.roll()` produce. One
+  difference is then ≈ −360, and because the original code took the absolute
+  value *outside* the mean, that step nearly cancelled the rest: measured `dx`
+  came out as **0.00017°** instead of 0.25°, low by a factor of ~1400. The
+  median returns 0.25° exactly. Longitude differences are additionally unwrapped
+  onto (−180°, 180°], so the wrap contributes a normal-sized step rather than an
+  outlier at all.
+- **Degenerate coordinates raise instead of returning nonsense.** A coordinate
+  that is not 1-D with ≥ 2 points now raises `ValueError`. The dangerous case
+  was a 0-d coordinate, which is what `ds.sel(latitude=0.5)` leaves behind:
+  `DataArray.diff()` on a 0-d array returns the value itself rather than
+  raising, so `dy` silently became **0.5 — the latitude**. A single-point
+  extraction, a natural thing to do when checking one location, produced a
+  plausible-looking finite GPIv that was pure garbage. A single-element
+  coordinate gave an empty diff and NaN-ed the whole field.
+- **Non-uniform spacing warns.** If the spread of the differences exceeds 1% of
+  the median, a `RuntimeWarning` says the area term is not meaningful on that
+  grid. This is silent on any regular grid at any resolution — 0.25°, 2°, 4° —
+  and fires only when the grid genuinely is not uniform, which is the one case
+  where a constant `dx` is wrong rather than merely uncalibrated.
+
+- **A regular, fixed-spacing lat–lon grid is assumed.** On a variable-resolution
+  or non-lat–lon grid, interpolate to a fixed grid first, or compute the area
+  term yourself. Documented in the README.
+
 ### Notes
 
-- **A regular, fixed-spacing lat–lon grid is assumed.** `dx` and `dy` are the
-  mean coordinate spacing. On a variable-resolution or non-lat–lon grid, that
-  mean is meaningless: interpolate to a fixed grid first, or compute the area
-  term yourself. Documented in the README.
 - The area weighting is correct at any uniform spacing. Separately, the GPIv
   coefficient and exponent were calibrated on 2° fields, so absolute GPIv from a
   much finer grid is not directly comparable to the published values.
