@@ -2,6 +2,51 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.4.0] - 2026-09-10
+
+### Fixed
+
+**Results-changing for any grid that is not 2° × 2°.** The GPIv grid-box area
+term used hardcoded `dx = 2.0` and `dy = 2.0` degrees:
+
+```python
+dx = 2.0
+dy = 2.0
+GPIv = (102.1 * vPI * eta_c)**4.90 * cos_lat * dx * dy
+```
+
+That is correct on the 2° × 2° grids of Chavas et al. (2025), but it was an
+assumption about the caller's grid rather than a property of the data. Since
+`run_vpigpiv()` loads **native 0.25° ERA5**, every grid box was weighted as
+though it were 2° × 2°, inflating GPIv by (2/0.25)² = **64×**.
+
+`dx` and `dy` are now measured from the coordinates:
+
+```python
+dx = float(np.abs(ds['longitude'].diff('longitude').mean()))
+dy = float(np.abs(ds['latitude'].diff('latitude').mean()))
+```
+
+The spatial pattern was never affected — the area term is a constant multiplier —
+but absolute GPIv values and any global or basin **sum** were wrong off a 2° grid.
+
+| grid | old GPIv | fixed GPIv |
+| --- | --- | --- |
+| 2° | correct | unchanged |
+| 1° | 4× too high | corrected |
+| 0.5° | 16× too high | corrected |
+| 0.25° | 64× too high | corrected |
+
+### Notes
+
+- **A regular, fixed-spacing lat–lon grid is assumed.** `dx` and `dy` are the
+  mean coordinate spacing. On a variable-resolution or non-lat–lon grid, that
+  mean is meaningless: interpolate to a fixed grid first, or compute the area
+  term yourself. Documented in the README.
+- The area weighting is correct at any uniform spacing. Separately, the GPIv
+  coefficient and exponent were calibrated on 2° fields, so absolute GPIv from a
+  much finer grid is not directly comparable to the published values.
+
 ## [1.3.0] - 2026-09-09
 
 ### Fixed

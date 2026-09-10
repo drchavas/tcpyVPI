@@ -665,6 +665,14 @@ def compute_gpiv_from_dataset(
     calling this function with only ``ds`` reproduces Chavas et al. (2025)
     exactly. They are exposed to allow sensitivity testing.
 
+    .. note::
+       **A regular, fixed-spacing latitude-longitude grid is assumed.** The
+       GPIv grid-box area uses ``dx`` and ``dy`` taken as the *mean* spacing of
+       the ``longitude`` and ``latitude`` coordinates. On a variable-resolution
+       or non-lat-lon grid that mean is meaningless; interpolate to a fixed
+       grid (2x2 deg matches the published calibration) before calling this,
+       or compute the area term yourself.
+
     Parameters
     ----------
     ds : xr.Dataset
@@ -764,9 +772,16 @@ def compute_gpiv_from_dataset(
     lat2d, _ = xr.broadcast(ds['latitude'], ds['longitude'])
     cos_lat = np.cos(np.deg2rad(lat2d))
     
-    dx = 2.0
-    dy = 2.0
-
+    # Grid-box area A = cos(lat) * dx * dy, with dx and dy the grid spacing in
+    # DEGREES. These were hardcoded to 2.0 through v1.3.0, matching the 2x2 deg
+    # grids of Chavas et al. (2025) but silently wrong on any other grid: on
+    # native 0.25 deg ERA5, which is what run_vpigpiv() loads, every box was
+    # weighted as though it were 2x2 deg, inflating GPIv by (2/0.25)**2 = 64.
+    # Now measured from the coordinates, assuming uniform spacing.
+    dx = float(np.abs(ds['longitude'].diff('longitude').mean()))
+    dy = float(np.abs(ds['latitude'].diff('latitude').mean()))
+    if verbose:
+        print(f"  Grid spacing: dx={dx:g} deg, dy={dy:g} deg")
     # The formula from the paper. Note DEFAULT_GPIV_COEFF is calibrated jointly
     # with the default exponent; see the gpiv_exponent warning in the docstring.
     GPIv = (DEFAULT_GPIV_COEFF * vPI * eta_c_cyclonic)**gpiv_exponent * cos_lat * dx * dy

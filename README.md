@@ -201,6 +201,22 @@ The main computation returns a dataset with:
 | `eta_c_cyclonic` | Same, hemisphere-mirrored and clipped at zero — the form GPIv uses | s⁻¹ |
 | `ventilation_index` | Ventilation Index | - |
 
+### Grid assumptions
+
+**The code assumes a regular, fixed-spacing latitude–longitude grid.** The GPIv
+grid-box area term is `cos(lat) · Δlon · Δlat`, and `Δlon` and `Δlat` are
+computed internally as the **mean spacing** of the `longitude` and `latitude`
+coordinates of your input data. They are constants, evaluated once per call.
+
+If you have a variable-resolution grid, an irregular grid, or anything that is
+not a plain lat–lon mesh, that mean is not meaningful. **Interpolate your data
+onto a fixed-spacing grid first** — 2° × 2° matches the published calibration —
+or modify the code to compute the area term appropriately for your grid.
+
+The area weighting is correct at any uniform spacing. Note separately that the
+GPIv coefficient and exponent were calibrated on 2° fields, so GPIv computed on a
+much finer grid is not directly comparable to the published values.
+
 ### A note on `eta_c`
 
 Two vorticity fields are returned, and the difference matters if you plot or
