@@ -227,9 +227,36 @@ Rolled or re-centred longitudes (`0…179.75` then `-180…-0.25`) are handled
 correctly: longitude differences are unwrapped onto (−180°, 180°], so the ±360°
 seam does not distort `Δlon`.
 
-The area weighting is correct at any uniform spacing. Note separately that the
-GPIv coefficient and exponent were calibrated on 2° fields, so GPIv computed on a
-much finer grid is not directly comparable to the published values.
+### GPIv is calibrated for 2°, and is not resolution-invariant
+
+The area weighting is correct at any uniform spacing, so GPIv **sums are
+grid-consistent**. That is not the same as being resolution-independent, and the
+distinction matters if you compare totals against Chavas et al. (2025).
+
+The coefficient 102.1 and exponent 4.90 were fit on 2° fields. GPIv goes as
+roughly the fifth power of `vPI · η_c`, which is strongly convex, so by Jensen's
+inequality evaluating it on fine-grid fields and summing gives a systematically
+**larger** total than evaluating it on the same fields averaged to 2°: the fine
+grid resolves `vPI` and `η_c` peaks that 2° averaging smooths, and the exponent
+amplifies them. On synthetic fields the effect is roughly 1.1× for 15%
+sub-2° variability in `vPI · η_c` and 1.4× for 40%. It is one-directional —
+finer always runs higher.
+
+`run_vpigpiv()` loads **native 0.25° ERA5**, so its output is off-calibration by
+default. **Coarsen to 2° to reproduce or compare against published values.**
+
+Rather than warn at runtime, the grid is recorded on the output so it travels
+into a saved netCDF and is still there when the file is reopened:
+
+```python
+r = compute_gpiv_from_dataset(ds)
+r['GPIv'].attrs['grid_dx_deg']           # 0.25
+r['GPIv'].attrs['calibration_grid_deg']  # 2.0
+r['GPIv'].attrs['calibrated']            # 'no'
+r['GPIv'].attrs['comment']               # the full caveat
+```
+
+`verbose=True` also flags it on the grid-spacing line.
 
 ### A note on `eta_c`
 

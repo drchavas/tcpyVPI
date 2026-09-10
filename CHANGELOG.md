@@ -73,9 +73,25 @@ where the mean silently produced a wrong number.
 
 ### Notes
 
-- The area weighting is correct at any uniform spacing. Separately, the GPIv
-  coefficient and exponent were calibrated on 2° fields, so absolute GPIv from a
-  much finer grid is not directly comparable to the published values.
+- **The area term makes sums grid-consistent, not resolution-invariant.** The
+  coefficient and exponent were fit on 2° fields, and GPIv goes as roughly the
+  fifth power of `vPI · η_c`. That is strongly convex, so by Jensen's inequality
+  evaluating GPIv on fine-grid fields and summing gives a systematically larger
+  total than evaluating it on the same fields averaged to 2°: the fine grid
+  resolves peaks that 2° averaging smooths, and the exponent amplifies them. On
+  synthetic fields, ~1.1× for 15% sub-2° variability in `vPI · η_c`, ~1.4× for
+  40%, always in the same direction. `run_vpigpiv()` loads native 0.25° ERA5, so
+  it is off-calibration by default; coarsen to 2° to compare against published
+  values.
+
+  Before this release the 64× inflation made any grid mismatch obvious. Removing
+  it removes that accidental signal, so the grid is now recorded explicitly
+  instead — on `GPIv.attrs` as `grid_dx_deg`, `grid_dy_deg`,
+  `calibration_grid_deg`, `calibrated` and a `comment`, which survive into a
+  saved netCDF, plus a note on the `verbose=True` grid-spacing line. Deliberately
+  **not** a `RuntimeWarning`: it would fire on the package's own default entry
+  point on nearly every call, and a warning that always fires is a warning
+  everyone learns to ignore.
 
 ## [1.3.0] - 2026-09-09
 

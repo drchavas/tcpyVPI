@@ -153,4 +153,32 @@ try:
 except ValueError:
     print("  PASS - a point-selected dataset raises instead of inventing a dy")
 
+# --- 5. calibration metadata --------------------------------------------------
+# GPIv sums are grid-consistent but NOT resolution-invariant: the ~5th power is
+# convex, so a fine grid sums higher than the same fields averaged to 2 deg.
+# There is deliberately no runtime warning (it would fire on run_vpigpiv()'s own
+# default 0.25 deg path), so the metadata is the only durable signal - it has to
+# be right, and it has to survive a netCDF round-trip.
+print()
+for step, expect in [(2.0, 'yes'), (0.25, 'no'), (4.0, 'no')]:
+    a = compute_gpiv_from_dataset(fixture(step), verbose=False)['GPIv'].attrs
+    assert a['calibrated'] == expect, \
+        f"FAIL: {step} deg reported calibrated={a['calibrated']}, expected {expect}"
+    assert np.isclose(a['grid_dx_deg'], step) and np.isclose(a['grid_dy_deg'], step), \
+        f"FAIL: {step} deg recorded grid ({a['grid_dx_deg']}, {a['grid_dy_deg']})"
+    assert a['calibration_grid_deg'] == 2.0
+    print(f"  {step:5.2f} deg -> calibrated='{a['calibrated']}', "
+          f"grid recorded as ({a['grid_dx_deg']:g}, {a['grid_dy_deg']:g})")
+
+import tempfile
+with tempfile.TemporaryDirectory() as td:
+    path = os.path.join(td, 'roundtrip.nc')
+    compute_gpiv_from_dataset(fixture(0.25), verbose=False).to_netcdf(path)
+    with xr.open_dataset(path) as reopened:
+        a = reopened['GPIv'].attrs
+        assert a['calibrated'] == 'no', "FAIL: calibration flag lost through netCDF"
+        assert np.isclose(a['grid_dx_deg'], 0.25), "FAIL: grid spacing lost through netCDF"
+        assert 'Coarsen' in a['comment'], "FAIL: the caveat comment did not survive"
+print("\n  PASS - calibration metadata is correct and survives a netCDF round-trip")
+
 print("\n  PASS - grid spacing is measured robustly, and unmeasurable grids fail loudly.")

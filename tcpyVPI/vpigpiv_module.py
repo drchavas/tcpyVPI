@@ -52,6 +52,7 @@ DEFAULT_VORT_CAP    = 3.7e-5    # s^-1, upper bound on clipped absolute vorticit
 DEFAULT_VI_MAX      = 0.145     # maximum ventilation index supporting a storm
 DEFAULT_GPIV_EXP    = 4.90      # exponent in GPIv = (c * vPI * eta_c)^a
 DEFAULT_GPIV_COEFF  = 102.1     # normalising constant, calibrated FOR exponent 4.90
+CALIBRATION_GRID_DEG = 2.0      # grid spacing the coefficient and exponent were fit on
 DEFAULT_CKCD        = 0.9       # ratio of enthalpy to momentum exchange coefficients
 DEFAULT_ASCENT_FLAG = 0         # tcpyPI: 0 = reversible, 1 = pseudo-adiabatic
 DEFAULT_DISS_FLAG   = 1         # tcpyPI: 1 = dissipative heating allowed
@@ -727,11 +728,24 @@ def compute_gpiv_from_dataset(
 
     .. note::
        **A regular, fixed-spacing latitude-longitude grid is assumed.** The
-       GPIv grid-box area uses ``dx`` and ``dy`` taken as the *mean* spacing of
-       the ``longitude`` and ``latitude`` coordinates. On a variable-resolution
-       or non-lat-lon grid that mean is meaningless; interpolate to a fixed
-       grid (2x2 deg matches the published calibration) before calling this,
-       or compute the area term yourself.
+       GPIv grid-box area uses ``dx`` and ``dy`` taken as the *median* spacing
+       of the ``longitude`` and ``latitude`` coordinates. On a variable-
+       resolution or non-lat-lon grid a single constant spacing is meaningless;
+       interpolate to a fixed grid (2x2 deg matches the published calibration)
+       before calling this, or compute the area term yourself.
+
+    .. note::
+       **GPIv is calibrated for 2x2 deg fields, and is not resolution-
+       invariant.** The area term is correct at any uniform spacing, so sums are
+       grid-*consistent*, but the coefficient 102.1 and exponent 4.90 were fit
+       on 2 deg data. Because GPIv goes as roughly the 5th power of
+       ``vPI * eta_c``, it is strongly convex, so by Jensen's inequality
+       evaluating it on fine-grid fields and summing gives a systematically
+       larger total than evaluating it on 2 deg-averaged fields: a fine grid
+       resolves vPI and eta_c peaks that 2 deg averaging smooths, and the
+       exponent amplifies them. Coarsen to 2 deg to reproduce or compare against
+       published values. The grid actually used is recorded in the output
+       attributes ``grid_dx_deg``, ``grid_dy_deg`` and ``calibration_grid_deg``.
 
     Parameters
     ----------
@@ -840,12 +854,42 @@ def compute_gpiv_from_dataset(
     # Now measured from the coordinates, assuming uniform spacing.
     dx = _spacing_deg(ds['longitude'], 'longitude', wrap=True)
     dy = _spacing_deg(ds['latitude'], 'latitude')
+    off_calibration = abs(dx - CALIBRATION_GRID_DEG) > 0.01 or abs(dy - CALIBRATION_GRID_DEG) > 0.01
     if verbose:
-        print(f"  Grid spacing: dx={dx:g} deg, dy={dy:g} deg")
+        print(f"  Grid spacing: dx={dx:g} deg, dy={dy:g} deg"
+              + (f"  (calibration grid is {CALIBRATION_GRID_DEG:g} deg; absolute "
+                 f"GPIv is not comparable to Chavas et al. 2025 because GPIv is "
+                 f"defined per unit gridbox area so will differ by factor "
+                 f"difference in gridbox area)"
+                 if off_calibration else ""))
     # The formula from the paper. Note DEFAULT_GPIV_COEFF is calibrated jointly
     # with the default exponent; see the gpiv_exponent warning in the docstring.
     GPIv = (DEFAULT_GPIV_COEFF * vPI * eta_c_cyclonic)**gpiv_exponent * cos_lat * dx * dy
-    GPIv.attrs = {'long_name': 'Ventilated Genesis Potential Index', 'units': ''}
+    # The grid is recorded on the output so it survives into a saved netCDF: the
+    # area term makes sums grid-CONSISTENT, but GPIv is not resolution-invariant
+    # (it goes as ~the 5th power, so by Jensen's inequality a fine grid sums
+    # higher than the same fields averaged to 2 deg). Whoever reopens the file
+    # needs to know which grid produced it.
+    GPIv.attrs = {
+        'long_name': 'Ventilated Genesis Potential Index',
+        'units': '',
+        'grid_dx_deg': dx,
+        'grid_dy_deg': dy,
+        'calibration_grid_deg': CALIBRATION_GRID_DEG,
+        'calibrated': 'no' if off_calibration else 'yes',
+        'comment': (
+            f'Computed on a {dx:g} x {dy:g} deg grid. The coefficient '
+            f'{DEFAULT_GPIV_COEFF:g} and exponent {gpiv_exponent:g} were calibrated on '
+            f'{CALIBRATION_GRID_DEG:g} deg fields. The grid-box area term is correct at '
+            f'any uniform spacing, but GPIv is a ~5th power and therefore not '
+            f'resolution-invariant: absolute values and sums from a finer grid run '
+            f'systematically high relative to the published calibration. Coarsen to '
+            f'{CALIBRATION_GRID_DEG:g} deg to compare against Chavas et al. (2025).'
+        ) if off_calibration else (
+            f'Computed on the {CALIBRATION_GRID_DEG:g} deg calibration grid of '
+            f'Chavas et al. (2025).'
+        ),
+    }
     
     # Assemble results into a single dataset
     results_ds = xr.Dataset({
