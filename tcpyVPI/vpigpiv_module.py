@@ -84,12 +84,42 @@ def _sel_level(da, level, what):
         )
 
 
-def _sample_profile(da):
-    """Cheaply reduce a DataArray to one column by taking index 0 of every
-    non-level dimension. Avoids pulling a whole lazy/remote array into memory
-    just to sanity-check units."""
+def _is_time_dim(da, d):
+    """True if dimension ``d`` of ``da`` looks like a time axis."""
+    if 'time' in str(d).lower():
+        return True
     try:
-        sel = {d: 0 for d in da.dims if d != 'level'}
+        return np.issubdtype(da[d].dtype, np.datetime64)
+    except Exception:
+        return False
+
+
+def _sample_profile(da, n=20):
+    """Cheaply reduce a DataArray to a domain-spanning sample for the unit checks.
+
+    Takes the first step of any time dimension and about ``n`` evenly strided
+    points along every other non-level dimension, so the sample covers the whole
+    horizontal domain (e.g. ~20 x 20 columns on any lat-lon grid). Strided
+    slices keep this a single hyperslab request on lazy/remote (OPeNDAP, dask)
+    data, so the whole array is never pulled into memory.
+
+    The unit checks in ``validate_pi_inputs`` compare the sample *maximum*
+    against wide bounds, so the sample must include moist, ocean columns.
+    Through v1.4.0 this took index 0 of every dimension - a single column. On
+    ERA5 (latitude ordered 90 -> -90) that column is the North Pole, whose
+    Dec-Mar mixing ratio is often below the 0.5 g/kg floor, so valid input was
+    rejected as "mixing ratio implausibly small". A land column would also have
+    left SST all-NaN and silently skipped the SST check.
+    """
+    try:
+        sel = {}
+        for d in da.dims:
+            if d == 'level':
+                continue
+            if _is_time_dim(da, d):
+                sel[d] = 0
+            else:
+                sel[d] = slice(None, None, max(1, da.sizes[d] // n))
         return np.asarray(da.isel(**sel).values, dtype=float) if sel else np.asarray(da.values, dtype=float)
     except Exception:
         return np.asarray(da.values, dtype=float).ravel()
@@ -368,7 +398,8 @@ def calculate_potential_intensity(
     rv_gkg_desc = (get_rv_from_q(q) * 1000.0).reindex(level=level_desc)
 
     # Catch unit errors before they turn into a plausible-looking wrong answer.
-    # Checked on a single sampled column, so this is cheap even for lazy data.
+    # Checked on a strided, domain-spanning sample of columns (~20 x 20), so this
+    # is cheap even for lazy data and does not depend on grid orientation.
     validate_pi_inputs(
         _sample_profile(sst_c),
         _sample_profile(sp_hpa),

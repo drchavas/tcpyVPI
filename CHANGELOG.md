@@ -2,6 +2,43 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.4.1] - 2026-10-09
+
+### Fixed
+
+**Not results-changing.** The input unit checks added in v1.1.0 could reject
+valid data with `ValueError: mixing ratio implausibly small`. Any run that
+completed was correct; nothing needs to be recomputed.
+
+The checks were applied to a single column, index 0 of every non-level
+dimension. ERA5 orders latitude 90 -> -90, so that column is the North Pole,
+and its maximum mixing ratio is often below the 0.5 g/kg floor in December
+through March. In the ERA5 monthly means checked (26 years of 1979-2022),
+45 year-months failed, e.g. 0.40 g/kg in January 1979 and 0.23 g/kg in
+February 1979. Hourly data, with more variability, is likely affected more
+often. Grid resolution does not matter; coarsening to 2 deg still leaves a polar
+first row. `run_vpigpiv()` and `run_vpigpiv_hourly()` were affected.
+
+The checks now use a strided sample spanning the whole horizontal domain
+(about 20 x 20 columns, first time step) and compare its maximum against the
+same bounds. The thresholds are unchanged, and a mixing ratio left in kg/kg is
+still rejected. The sample is still a single strided read, so the check stays
+cheap on lazy and remote data.
+
+This also closes a related gap: if the single sampled column was over land,
+SST was all NaN there and the SST check was skipped without notice.
+
+### Added
+
+- A regression case in `tests/check_unit_fixes.py`, run by `deploy.sh`: a grid
+  whose first row is polar-dry must pass, and the same grid in kg/kg must fail.
+
+### Notes
+
+- The bounds are deliberately wide but are still compared against the driest
+  plausible input. A domain that is entirely high-latitude winter (e.g. a
+  60-90 N subset in January) can still fall below the 0.5 g/kg floor.
+
 ## [1.4.0] - 2026-09-10
 
 ### Fixed
