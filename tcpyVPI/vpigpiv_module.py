@@ -424,8 +424,23 @@ def calculate_potential_intensity(
         output_dtypes=[float] * 5
     )
 
-    # Calculate air-sea disequilibrium term
-    asdeq = vmax**2 * (1.0 / CKCD) * To_k / (sst_k * (sst_k - To_k))
+    # No heat engine, no potential intensity. tcpyPI evaluates
+    # vmax**2 = CKCD*(Ts/To)*(CAPE* - CAPE_m) without using the Carnot
+    # efficiency (Ts - To)/To, so it can return a small positive vmax (~1-6 m/s
+    # in ERA5 monthly means) where the outflow temperature is at or above the
+    # SST: under a strong, shallow trade inversion the parcel's level of neutral
+    # buoyancy (the outflow level) sits near the surface (~970 hPa) while
+    # CAPE* - CAPE_m is still slightly positive. Treat these columns as PI = 0,
+    # like every other column where tcpyPI finds no storm.
+    no_engine = (vmax > 0) & (To_k >= sst_k)
+    vmax = vmax.where(~no_engine, 0.0)
+
+    # Air-sea disequilibrium, from inverting the PI expression. It is undefined
+    # where PI = 0 (0/0 if To == SST), so it is set to 0 there; those columns
+    # get no ventilation index and vPI = 0 downstream.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        asdeq = vmax**2 * (1.0 / CKCD) * To_k / (sst_k * (sst_k - To_k))
+    asdeq = asdeq.where(vmax != 0, 0.0)
 
     #Add metadata
     vmax.attrs = {'long_name': 'Potential Intensity', 'units': 'm/s'}
@@ -523,6 +538,11 @@ def calculate_entropy_deficit(
     from 2 m temperature and dewpoint; that code is retained below, commented
     out, for reference.)
 
+    **Guards.**  As in ``ventilation.m`` of Chavas et al. (2025), the numerator
+    is floored at 0 (no supersaturation), the denominator at 1 J/kg/K (so chi
+    stays finite where PI is near zero), and chi is NaN where the air-sea term
+    is negative.
+
     Parameters
     ----------
     ds : xr.Dataset
@@ -592,9 +612,16 @@ def calculate_entropy_deficit(
         print("sm_600: min =", np.nanmin(sm_600).item(), ", max =", np.nanmax(sm_600).item())
         print("sm_star_600: min =", np.nanmin(sm_star_600).item(), ", max =", np.nanmax(sm_star_600).item())
     
-    # Calculate Chi
-    numerator = sm_star_600 - sm_600
-    chi = numerator / asdeq
+    # Calculate Chi with the same guards as ventilation.m (Chavas et al. 2025):
+    #   chi = max(0, s*_m - s_m) / max(1, s*_SST - s_b),  NaN where s*_SST - s_b < 0.
+    # The numerator floor removes supersaturation (RH is not capped at 1 here);
+    # the denominator floor keeps chi finite where PI, and so the inverted air-sea
+    # term, is near zero. Through v1.4.1 there were no guards, and every PI = 0
+    # ocean column gave chi = +/-inf.
+    numerator = np.maximum(sm_star_600 - sm_600, 0.0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        chi = numerator / np.maximum(asdeq, 1.0)
+    chi = xr.where(asdeq < 0, np.nan, chi)
     
     chi = xr.DataArray(chi, coords=psfc.coords, dims=psfc.dims,
                        attrs={'long_name': 'Entropy Deficit (Chi)', 'units': ''})
@@ -862,9 +889,11 @@ def compute_gpiv_from_dataset(
     if verbose:
         print("  Combining components for final GPIv...")
     
-    # Ventilation Index (VI)
-    ventilation_index = (VWS * Chi) / PI
-    ventilation_index = ventilation_index.where(ventilation_index > 0) # Set non-positives to NaN
+    # Ventilation Index (VI). Undefined where PI = 0 (no storm to ventilate), so
+    # NaN there, as in ventilation.m. Chi >= 0, so VI >= 0; VI = 0 (no
+    # ventilation) is valid and gives vPI = PI.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ventilation_index = ((VWS * Chi) / PI).where(PI > 0)
     ventilation_index.attrs = {'long_name': 'Ventilation Index', 'units': ''}
 
     # Ventilated Potential Intensity (vPI)
@@ -881,6 +910,14 @@ def compute_gpiv_from_dataset(
         vPI_factor = vPI_factor_complex.real
     
     vPI = xr.DataArray(vPI_factor, coords=PI.coords, dims=PI.dims) * PI
+
+    # No storm means vPI = 0, not missing, as in Vp_VIreduced_calc.m: where the
+    # column is fully ventilated (VI > VI_max) and where there is no heat engine
+    # (PI = 0). GPIv is then 0 there as well. vPI stays NaN only where PI is
+    # missing (land, missing data) or VI is otherwise undefined. Through v1.4.1
+    # both cases were NaN, so NaN-skipping means (climatologies, daily means of
+    # hourly output) dropped them instead of counting them as zero and ran high.
+    vPI = xr.where((PI == 0) | (ventilation_index > VI_max), 0.0, vPI)
     vPI.attrs = {'long_name': 'Ventilated Potential Intensity', 'units': 'm/s'}
     
     # Final Ventilated Genesis Potential Index (GPIv)

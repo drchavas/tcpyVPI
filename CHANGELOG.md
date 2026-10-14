@@ -2,6 +2,64 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.4.2] - 2026-10-13
+
+### Fixed
+
+**No-storm ocean columns now give vPI = 0 and GPIv = 0 instead of NaN.
+Single-month GPIv values and sums are unchanged; climatologies and other
+averages over time change.**
+
+Through v1.4.1, an ocean column where no storm is possible got vPI = NaN and
+GPIv = NaN rather than 0. That covered two cases:
+
+- **Fully ventilated** (ventilation index > `VI_max`), most of the ocean in
+  any given month. In July 2014 (46°S–46°N) this was 71% of ocean columns.
+- **No potential intensity** (PI = 0).
+
+A NaN contributes nothing to a single month's sum, so per-month GPIv values and
+totals are unchanged. But xarray averages skip NaN by default, so
+`compute_monthly_climatology()`, and the daily means of hourly output, dropped
+those months instead of counting them as zero. Anywhere a column is ventilated
+in some years but not others, the climatology averaged only the favorable
+years and ran high. On a 2° sample of ERA5 July 2010–2019:
+
+| July climatology | v1.4.1 | v1.4.2 |
+| --- | --- | --- |
+| Global GPIv total | 13.3 | 11.7 (= mean of the yearly totals) |
+| vPI in the 1,321 cells ventilated in some years only | 67 m/s | 34 m/s |
+
+**Recompute any climatology, anomaly or time mean of vPI or GPIv made with
+v1.4.1 or earlier.** vPI now matches `Vp_VIreduced_calc.m` of Chavas et al.
+(2025), which also sets the reduction factor to 0 above `VI_max`. vPI and
+GPIv remain NaN over land and wherever PI itself is missing.
+
+**No heat engine means PI = 0.** tcpyPI computes
+`vmax**2 = CKCD * (Ts/To) * (CAPE* - CAPE_m)` without using the Carnot
+efficiency, so where the outflow temperature is at or above the SST it can
+still return a small positive PI (about 1–6 m/s). This happens under a strong,
+shallow trade inversion, where the outflow level sits near 970 hPa. These
+columns now get PI = 0. They are rare, 2 of about 394,000 ocean columns in
+July 2014, and their vPI and GPIv were already missing, so this changes the PI
+field only. Thanks to the contributed patch that identified this.
+
+**Entropy deficit (χ) guards.** χ is now
+`max(0, s*_m - s_m) / max(1, s*_SST - s_b)`, and NaN where the air-sea term is
+negative, as in `ventilation.m` of Chavas et al. (2025). Without the guards,
+every PI = 0 ocean column gave χ = ±inf: about 8,100 columns in July 2014. In
+that month the guards change no finite vPI or GPIv value.
+
+**Ventilation index.** VI is now NaN where PI = 0, where it is undefined, as in
+`ventilation.m`. VI = 0, which happens when there is no shear, is now kept and
+gives vPI = PI; before, it was set to NaN. Real data essentially never has zero
+shear.
+
+### Added
+
+- `tests/check_no_storm_columns.py`, run by `deploy.sh --check`: a calm column,
+  a fully ventilated column, a land column, and a column with no heat engine
+  (via a tcpyPI stub), plus a check that no output contains ±inf.
+
 ## [1.4.1] - 2026-10-09
 
 ### Fixed

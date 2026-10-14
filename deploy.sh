@@ -204,6 +204,9 @@ MSG=$(head -1 "$MSG_FILE")
 if [[ $FULL == 1 ]]; then
   if [[ -f tests/check_unit_fixes.py ]]; then
     python3 tests/check_unit_fixes.py || die "regression test failed"
+    if [[ -f tests/check_no_storm_columns.py ]]; then
+      python3 tests/check_no_storm_columns.py || die "no-storm column regression test failed"
+    fi
     ok "regression test passed"
   fi
   if python3 -c "import build, twine" >/dev/null 2>&1; then
