@@ -16,17 +16,19 @@
 # UI, which creates the tag and triggers .github/workflows/publish.yml.
 #
 # Usage:
-#   ./deploy.sh "commit message"          # the normal path
-#   ./deploy.sh --check "msg"             # also build + run the regression test
+#   ./deploy.sh "commit message"          # the normal path; runs the fast tests (~8 s)
+#   ./deploy.sh --check "msg"             # also the slow grid-spacing test + build check
+#   ./deploy.sh --skip-tests "msg"        # skip all tests (e.g. a README-only fix)
 #   ./deploy.sh --dry-run "msg"           # show what would happen, change nothing
 #
 set -euo pipefail
 
-DRY_RUN=0; FULL=0
+DRY_RUN=0; FULL=0; SKIP_TESTS=0
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --check|--full) FULL=1 ;;
+    --skip-tests) SKIP_TESTS=1 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
   shift
@@ -200,15 +202,36 @@ PY
 fi
 MSG=$(head -1 "$MSG_FILE")
 
-# ---------------------------------------------------------------- optional checks
-if [[ $FULL == 1 ]]; then
-  if [[ -f tests/check_unit_fixes.py ]]; then
-    python3 tests/check_unit_fixes.py || die "regression test failed"
-    if [[ -f tests/check_no_storm_columns.py ]]; then
-      python3 tests/check_no_storm_columns.py || die "no-storm column regression test failed"
+# ---------------------------------------------------------------- regression tests
+# The fast, offline checks run on every deploy; --check adds the slow one. Each
+# runs against the working copy (the scripts put the repo root on sys.path).
+FAST_TESTS=(tests/check_unit_fixes.py tests/check_no_storm_columns.py tests/check_config_defaults.py)
+SLOW_TESTS=(tests/check_grid_spacing.py)
+run_tests() {
+  local t log
+  for t in "$@"; do
+    [[ -f "$t" ]] || { warn "$t not found - skipped"; continue; }
+    log=$(mktemp)
+    if PYTHONDONTWRITEBYTECODE=1 python3 -W ignore "$t" >"$log" 2>&1; then
+      ok "$(basename "$t")"
+    else
+      tail -15 "$log"; rm -f "$log"; die "$(basename "$t") failed - nothing was committed or pushed"
     fi
-    ok "regression test passed"
-  fi
+    rm -f "$log"
+  done
+}
+if [[ $SKIP_TESTS == 1 ]]; then
+  warn "tests skipped (--skip-tests)"
+elif ! python3 -c "import numpy, xarray, tcpyPI" >/dev/null 2>&1; then
+  warn "tests skipped: $(command -v python3) cannot import numpy/xarray/tcpyPI"
+else
+  echo "${bold}Tests:${rst}"
+  run_tests "${FAST_TESTS[@]}"
+  if [[ $FULL == 1 ]]; then run_tests "${SLOW_TESTS[@]}"; fi
+fi
+
+# ---------------------------------------------------------------- build check (--check)
+if [[ $FULL == 1 ]]; then
   if python3 -c "import build, twine" >/dev/null 2>&1; then
     rm -rf dist build ./*.egg-info
     python3 -m build >/tmp/tcpyvpi_build.log 2>&1 || { tail -20 /tmp/tcpyvpi_build.log; die "build failed"; }

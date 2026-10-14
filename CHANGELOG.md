@@ -2,6 +2,53 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.4.3] - 2026-10-14
+
+### Fixed
+
+**Cold ocean (SST ≤ 5 °C) now gives PI = 0, vPI = 0 and GPIv = 0 instead of
+NaN. Global GPIv and every value over warmer ocean are unchanged;
+climatologies and other averages over time change at high latitudes.**
+
+tcpyPI does not compute PI where SST ≤ 5 °C and returns NaN. The `pcmin.m`
+used by Chavas et al. (2025) returns PI = 0 there instead, so tcpyVPI now
+follows the paper. This includes ice-covered ocean, where ERA5 SST is about
+−1.7 °C. Land and missing data stay NaN.
+
+This finishes the change made in v1.4.2. Because xarray averages skip NaN, a
+cold month was dropped from a climatology instead of counted as zero. Where
+SST is at or below 5 °C in all but one year, the climatological value became
+that one warm year's value. An external user found about 630 climatology
+cells, mostly in high-latitude winter (Barents Sea, Labrador Sea, Sea of
+Japan), biased by more than 1 m/s and by up to 38 m/s. In January 2014
+(0–80°N, 2° sample), 1,246 cold-ocean cells go from NaN to 0, and the GPIv
+total is unchanged.
+
+**Recompute any high-latitude climatology, anomaly or time mean of PI, vPI or
+GPIv made with v1.4.2 or earlier.**
+
+**The 5 °C cutoff is a hard edge, not a physical threshold.** It comes from
+Emanuel's original PI code. Just above it, PI reaches 30–50 m/s at high
+latitudes (up to 52 m/s in the January 2014 example), so setting 0 below it is
+a convention, the paper's convention, rather than a result. The README
+("Zero versus missing") shows how to mask these cells if you'd rather treat
+them as missing.
+
+### Changed
+
+- Corrected a v1.4.2 code comment. Setting vPI = 0 where PI = 0 follows from
+  vPI ≤ PI; it does not literally match the MATLAB code, where such columns end
+  up NaN through an undefined ventilation index. The ventilated case
+  (VI > `VI_max` gives vPI = 0) does match `Vp_VIreduced_calc.m`.
+- README: new section "Zero versus missing".
+- `deploy.sh` now runs the fast regression tests (about 8 s) on every deploy and
+  stops before committing if one fails. `--check` adds the slow grid-spacing
+  test and the build check; `--skip-tests` skips them all.
+
+### Added
+
+- Cold-ocean case in `tests/check_no_storm_columns.py`.
+
 ## [1.4.2] - 2026-10-13
 
 ### Fixed

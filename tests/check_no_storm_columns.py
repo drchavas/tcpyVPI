@@ -7,7 +7,9 @@
 #   3. a land column (SST missing) stays NaN everywhere
 #   4. a column with no heat engine (tcpyPI returns vmax > 0 with To >= SST)
 #      gets PI = 0, vPI = 0, GPIv = 0
-#   5. no output field contains +/-inf
+#   5. cold ocean (SST <= 5 C, where tcpyPI returns no PI) gets PI = 0,
+#      vPI = 0, GPIv = 0, as pcmin.m in Chavas et al. (2025) does (v1.4.3)
+#   6. no output field contains +/-inf
 # Needs no pip install: the repo root goes first on sys.path, so it always
 # exercises the working copy rather than an installed release.
 
@@ -33,15 +35,16 @@ rv  = 0.622*e/(lev-e); q = rv/(1.0+rv)
 
 # Three latitude rows, each its own case; two identical longitudes so the grid
 # spacing is measurable.
-CALM, SHEARED, LAND = 0, 1, 2
-lat = np.array([16., 15., 14.])
+CALM, SHEARED, LAND, COLD = 0, 1, 2, 3
+lat = np.array([16., 15., 14., 13.])
 lon = np.array([300., 302.])
 c2 = {'latitude': lat, 'longitude': lon}
 c3 = {'level': lev, **c2}
-shape2, shape3 = (3, 2), (len(lev), 3, 2)
+shape2, shape3 = (4, 2), (len(lev), 4, 2)
 
 sst = np.full(shape2, 300.15)
 sst[LAND] = np.nan
+sst[COLD] = 273.15 + 3.0                  # 3 C, below tcpyPI's 5 C cutoff
 u = np.zeros(shape3)
 u[lev == 200, SHEARED, :] = 60.0           # 60 m/s of 850-200 hPa shear
 
@@ -89,6 +92,15 @@ print(f"  sheared  : VI = {row('ventilation_index', SHEARED)[0]:.3f} > {m.DEFAUL
 for k in FIELDS:
     assert np.all(np.isnan(row(k, LAND))), f"FAIL: land column {k} should be NaN"
 print("  land     : every field NaN")
+
+# 5. Cold ocean: zero, like pcmin.m, rather than tcpyPI's missing value.
+assert np.all(np.isnan([m.pi(3.0, 1010., lev, TC, rv * 1000.)[0]])), \
+    "fixture assumption broken: tcpyPI now computes PI below 5 C"
+for k in ['PI', 'vPI', 'GPIv']:
+    assert np.all(row(k, COLD) == 0), f"FAIL: cold ocean {k} is {row(k, COLD)}, expected 0"
+assert np.all(np.isfinite(row('Chi', COLD))), "FAIL: cold ocean Chi should be finite"
+assert np.all(np.isnan(row('ventilation_index', COLD))), "FAIL: cold ocean VI should be NaN (PI = 0)"
+print("  cold     : SST 3 C -> PI = 0, vPI = 0, GPIv = 0 (tcpyPI alone gives NaN)")
 
 # 4. No heat engine. tcpyPI is replaced by a stub that reproduces what the real
 # routine returns under a shallow trade inversion: a small positive vmax with

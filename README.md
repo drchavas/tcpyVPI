@@ -280,6 +280,32 @@ r['GPIv'].attrs['comment']               # the full caveat
 
 `verbose=True` also flags it on the grid-spacing line.
 
+### Zero versus missing
+
+Over the ocean, a column where no storm is possible gets **0**, not NaN, for
+`PI`, `vPI` and `GPIv`. This matters for any average over time: xarray skips
+NaN by default, so a missing value would be dropped instead of counted as zero,
+and climatologies would run high. A column counts as "no storm" when:
+
+- it is fully ventilated (`ventilation_index > VI_max`): `vPI = 0`;
+- there is no heat engine (outflow temperature at or above the SST): `PI = 0`;
+- **SST is at or below 5 °C**, including ice-covered ocean: `PI = 0`.
+
+NaN is kept for land and missing input. `ventilation_index` is NaN wherever
+`PI = 0`, because it is undefined there.
+
+The 5 °C rule follows the paper's `pcmin.m`, which returns PI = 0 below 5 °C.
+tcpyPI returns NaN there instead. The cutoff comes from Emanuel's original PI
+code and is **a hard edge, not a physical threshold**: just above 5 °C, PI can
+reach 30–50 m/s at high latitudes (the polar-low regime). To treat these cells
+as missing instead, mask them yourself:
+
+```python
+r = compute_gpiv_from_dataset(ds)
+cold = (ds['SSTK'] - 273.15) <= 5.0
+vPI_cold_masked = r['vPI'].where(~cold)
+```
+
 ### A note on `eta_c`
 
 Two vorticity fields are returned, and the difference matters if you plot or

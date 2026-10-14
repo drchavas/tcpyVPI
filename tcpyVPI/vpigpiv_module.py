@@ -435,6 +435,16 @@ def calculate_potential_intensity(
     no_engine = (vmax > 0) & (To_k >= sst_k)
     vmax = vmax.where(~no_engine, 0.0)
 
+    # Cold ocean: tcpyPI does not compute PI where SST <= 5 C and returns NaN,
+    # but pcmin.m as used by Chavas et al. (2025) returns VMAX = 0 there, so
+    # follow the paper and set PI = 0 (this includes ice-covered ocean, where
+    # ERA5 SST is about -1.7 C). Land and missing data stay NaN. The 5 C cutoff
+    # is inherited from Emanuel's PI code and is a hard edge, not a physical
+    # threshold: just above it PI can reach 30-50 m/s (the polar-low regime).
+    # Users who want these cells treated as missing can mask SST <= 5 C.
+    cold_ocean = vmax.isnull() & np.isfinite(sst_c) & (sst_c <= 5.0)
+    vmax = vmax.where(~cold_ocean, 0.0)
+
     # Air-sea disequilibrium, from inverting the PI expression. It is undefined
     # where PI = 0 (0/0 if To == SST), so it is set to 0 there; those columns
     # get no ventilation index and vPI = 0 downstream.
@@ -911,12 +921,14 @@ def compute_gpiv_from_dataset(
     
     vPI = xr.DataArray(vPI_factor, coords=PI.coords, dims=PI.dims) * PI
 
-    # No storm means vPI = 0, not missing, as in Vp_VIreduced_calc.m: where the
-    # column is fully ventilated (VI > VI_max) and where there is no heat engine
-    # (PI = 0). GPIv is then 0 there as well. vPI stays NaN only where PI is
-    # missing (land, missing data) or VI is otherwise undefined. Through v1.4.1
-    # both cases were NaN, so NaN-skipping means (climatologies, daily means of
-    # hourly output) dropped them instead of counting them as zero and ran high.
+    # No storm means vPI = 0, not missing: where the column is fully ventilated
+    # (VI > VI_max), as in Vp_VIreduced_calc.m, and where PI = 0 (no heat engine,
+    # or SST <= 5 C), since vPI <= PI. (In the MATLAB code a PI = 0 column ends
+    # up NaN, via an undefined VI; 0 is the bounded value.) GPIv is then 0 there
+    # as well. vPI stays NaN only where PI is missing (land, missing data) or VI
+    # is otherwise undefined. Through v1.4.1 these were NaN, so NaN-skipping
+    # means (climatologies, daily means of hourly output) dropped them instead
+    # of counting them as zero and ran high.
     vPI = xr.where((PI == 0) | (ventilation_index > VI_max), 0.0, vPI)
     vPI.attrs = {'long_name': 'Ventilated Potential Intensity', 'units': 'm/s'}
     
