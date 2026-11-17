@@ -2,6 +2,34 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.5.1] - 2026-11-17
+
+### Fixed
+
+**`plot_vpigpiv()` no longer fails when the ventilation index is exactly 0. No
+computed values change.**
+
+Since v1.4.2 the ventilation index (VI) can be exactly 0: no shear, or the
+entropy deficit floored at 0. The VI map used `LogNorm()` with no limits, so
+matplotlib took `vmin` from the data, got 0, and raised
+`ValueError: Invalid vmin or vmax`. That broke `run_vpigpiv(..., plot=True)`
+and `run_vpigpiv_hourly(..., plot=True)` whenever a VI = 0 cell was present,
+for example `run_vpigpiv_hourly(2022, 9, ..., hour=12, plot=True)` in
+`tcpyVPI_ERA5builtin_example.ipynb`. Loading and computation were unaffected.
+
+The VI map's log colour scale now has the fixed plotted range,
+`LogNorm(vmin=0.1, vmax=10)`. VI is clipped at 0.1 for plotting, so VI = 0 (no
+ventilation, the most favourable case) shows as the lowest colour rather than
+a blank, and `extend='both'` marks values outside 0.1–10 on the colour bar.
+Land and PI = 0 cells stay blank. The other maps (vPI, PI, eta_c, GPIv) use
+linear scales and were not affected.
+
+### Added
+
+- `tests/check_plot_vpigpiv.py`: draws every `plot_vpigpiv()` figure with the
+  Agg backend on a small dataset containing a VI = 0 cell. Run by `deploy.sh`;
+  skipped if matplotlib or cartopy is not installed.
+
 ## [1.5.0] - 2026-11-17
 
 ### Fixed

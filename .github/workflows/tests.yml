@@ -28,14 +28,15 @@ jobs:
       - name: Install tcpyVPI and its dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,plot]"
 
       - name: Run the offline checks
         run: |
           set -e
           for t in tests/check_unit_fixes.py tests/check_no_storm_columns.py \
                    tests/check_config_defaults.py tests/check_era5_loader.py \
-                   tests/check_outflow_temperature.py; do
+                   tests/check_outflow_temperature.py \
+                   tests/check_plot_vpigpiv.py; do
             echo "::group::$t"
             python "$t"
             echo "::endgroup::"

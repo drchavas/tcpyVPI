@@ -1258,8 +1258,15 @@ def plot_vpigpiv(
                            subplot_kw={'projection': ccrs.PlateCarree(central_longitude=centlong)})
     lev_exp = np.linspace(-1, 1, 25)
     levs = np.power(10, lev_exp)
-    xr.plot.contourf(ventilation_index, ax=ax, norm=LogNorm(), levels=levs,
-                     transform=ccrs.PlateCarree(), cmap=cm.plasma)
+    # Log colour scale over a fixed range, 0.1 to 10. VI can be exactly 0 (no
+    # ventilation, the most favourable case), and a LogNorm left to autoscale
+    # takes vmin = 0 from the data and fails ("Invalid vmin or vmax"). So the
+    # norm gets the plotted range, and VI is clipped to its bottom so VI = 0
+    # shows as the lowest colour rather than a blank. NaN (land, PI = 0) stays
+    # blank. extend='both' marks values outside 0.1-10 on the colour bar.
+    xr.plot.contourf(ventilation_index.clip(min=levs[0]), ax=ax,
+                     norm=LogNorm(vmin=levs[0], vmax=levs[-1]), levels=levs,
+                     extend='both', transform=ccrs.PlateCarree(), cmap=cm.plasma)
     ax.set_title(f"Ventilation Index, {time_str}")
     ax.coastlines()
     gl = ax.gridlines(draw_labels=True)
