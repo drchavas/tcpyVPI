@@ -2,6 +2,65 @@
 
 All notable changes to tcpyVPI will be documented in this file.
 
+## [1.5.0] - 2026-11-17
+
+### Fixed
+
+**The built-in ERA5 loader works again.** NCAR's RDA → GDEX migration renamed
+the monthly-mean THREDDS folder from `files/g/d633001_nc/` to `files/g/d633001/`,
+and the old path now returns "file not found". With tcpyVPI ≤ 1.4.3,
+`run_vpigpiv(..., data_source='monthly')`, the climatology helpers and
+`load_era5_*` all failed with `OSError: [Errno -90] NetCDF: file not found`.
+The loader now reads from `https://tds.gdex.ucar.edu/thredds/dodsC/files/g`
+(`thredds.rda.ucar.edu` is an alias of it). File names and the hourly folder
+(`d633000`) are unchanged. No computed values change.
+
+### Added
+
+- **Fallback and retries.** Each file is tried at a list of known locations in
+  order (GDEX `d633001`, the RDA alias `d633001`, the old RDA `d633001_nc`), and
+  the first that works is remembered for the session. Transient network errors
+  (`NetCDF: I/O failure`, SSL errors) are retried with a short backoff; "file not
+  found" moves straight to the next location.
+- **Clear errors.** If every location fails, `ERA5DataUnavailableError` (an
+  `OSError`) lists each URL tried and explains how to point tcpyVPI at a new
+  location, with links to the GDEX dataset pages.
+- **Configurable server.** `tcpyVPI.set_era5_thredds_base(url)` or the
+  environment variable `TCPYVPI_ERA5_THREDDS` sets the location; an override is
+  then the only location tried. `get_era5_thredds_candidates()` shows what will
+  be tried. The URL builders take the base and dataset folder as arguments.
+- **Outflow temperature.** `compute_gpiv_from_dataset()` now outputs `T_o`, the
+  outflow temperature from tcpyPI, in K, NaN where PI is 0 or missing.
+  `calculate_potential_intensity(..., return_To=True)` returns it as a third
+  value; the default return is unchanged. Every other output is bit-for-bit
+  unchanged.
+- **Tests.** `tests/check_era5_loader.py` (URL builders, fallback, retries, error
+  message, overrides; offline, with a stub opener) and
+  `tests/check_outflow_temperature.py`, both run by `deploy.sh` and by a new
+  GitHub Actions workflow on every push (`.github/workflows/tests.yml`).
+  `tests/test_era5_server.py` opens one monthly and one hourly file on the live
+  server; it is marked `network`, skipped unless `TCPYVPI_NETWORK_TESTS=1`, and
+  run weekly by `.github/workflows/era5-server.yml`.
+
+### Changed
+
+- README: the Example Notebooks table links each notebook to open in Colab
+  directly from GitHub; new section "Data source for the built-in ERA5 loader";
+  `T_o` added to the output table.
+- `python_notebooks/tcpyVPI_ERA5_example.ipynb` builds its own URLs; its THREDDS
+  cell now points at `tds.gdex.ucar.edu` and `d633001`.
+- `github_tests/tcpyVPI_ERA5_from_github.ipynb` now installs `@v1.5.0` instead
+  of `@v1.0.1`.
+- `load_era5_monthly()` and `load_era5_hourly()` pass `compat='override'` and
+  `join='outer'` to `xr.merge` explicitly, silencing xarray's FutureWarning about
+  changing defaults. The result is unchanged; the merged variables don't overlap.
+
+### Removed
+
+- `python_notebooks/tcpyVPI_ERA5climoanomaly_Jose.ipynb`. Climatologies and anomalies
+  are still available through `compute_monthly_climatology()`, `compute_anomalies()`
+  and `run_vpigpiv(..., compute_anomalies=True)`.
+
 ## [1.4.3] - 2026-10-14
 
 ### Fixed

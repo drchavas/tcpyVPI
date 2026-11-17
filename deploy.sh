@@ -205,7 +205,8 @@ MSG=$(head -1 "$MSG_FILE")
 # ---------------------------------------------------------------- regression tests
 # The fast, offline checks run on every deploy; --check adds the slow one. Each
 # runs against the working copy (the scripts put the repo root on sys.path).
-FAST_TESTS=(tests/check_unit_fixes.py tests/check_no_storm_columns.py tests/check_config_defaults.py)
+FAST_TESTS=(tests/check_unit_fixes.py tests/check_no_storm_columns.py tests/check_config_defaults.py
+            tests/check_era5_loader.py tests/check_outflow_temperature.py)
 SLOW_TESTS=(tests/check_grid_spacing.py)
 run_tests() {
   local t log

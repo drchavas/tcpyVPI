@@ -32,6 +32,9 @@ from .era5_loader import (
     load_era5_monthly,
     load_era5_hourly,
     load_era5_hourly_range,
+    set_era5_thredds_base,
+    get_era5_thredds_candidates,
+    ERA5DataUnavailableError,
 )
 
 from .climatology import (
@@ -42,7 +45,7 @@ from .climatology import (
     compute_standardized_anomalies,
 )
 
-__version__ = "1.4.3"
+__version__ = "1.5.0"
 __author__ = "Dan Chavas, Jose Ocegueda Sanchez"
 
 __all__ = [
@@ -62,6 +65,9 @@ __all__ = [
     "load_era5_monthly",
     "load_era5_hourly",
     "load_era5_hourly_range",
+    "set_era5_thredds_base",
+    "get_era5_thredds_candidates",
+    "ERA5DataUnavailableError",
     
     # Climatology
     "compute_monthly_climatology",

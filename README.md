@@ -94,6 +94,32 @@ The package accesses ERA5 data via THREDDS with the following structure:
 - **Pressure level variables**: Daily files containing 24 hours
   - Example: `e5.oper.an.pl.128_131_u.ll025uv.2020081500_2020081523.nc`
 
+## Data source for the built-in ERA5 loader
+
+`run_vpigpiv()`, the climatology helpers and `load_era5_*` read ERA5 remotely,
+over OPeNDAP, from NCAR's GDEX THREDDS server; nothing is downloaded in full.
+
+| Data | Location |
+|------|----------|
+| Monthly means ([d633001](https://gdex.ucar.edu/datasets/d633001/)) | `https://tds.gdex.ucar.edu/thredds/dodsC/files/g/d633001/` |
+| Hourly ([d633000](https://gdex.ucar.edu/datasets/d633000/)) | `https://tds.gdex.ucar.edu/thredds/dodsC/files/g/d633000/` |
+
+NCAR has moved these files before: the 2026 RDA → GDEX migration renamed the
+monthly folder from `d633001_nc` to `d633001`, which broke tcpyVPI ≤ 1.4.3. Since
+1.5.0 the loader tries a short list of known locations, retries transient
+network errors, and remembers the location that works. If NCAR moves the data
+again, find the new OPeNDAP location on the dataset page and point tcpyVPI at it:
+
+```python
+import tcpyVPI
+tcpyVPI.set_era5_thredds_base("https://<server>/thredds/dodsC/files/g")
+# or, before starting Python:  export TCPYVPI_ERA5_THREDDS=https://<server>/thredds/dodsC/files/g
+```
+
+The hourly server is slow, about 30 s to open each file. A weekly GitHub Actions
+check (`.github/workflows/era5-server.yml`) opens one monthly and one hourly
+file, so a server change shows up in this repository within a week.
+
 ## Climatology Computation
 
 ```python
@@ -178,13 +204,14 @@ Two caveats:
 
 ## Example Notebooks
 
+Each link opens the notebook in Google Colab directly from this repository. The examples in `python_notebooks/` install the latest tcpyVPI from PyPI when run.
+
 | Notebook | What it shows |
 |----------|---------------|
-| `python_notebooks/tcpyVPI_ERA5builtin_example.ipynb` | Shortest path: monthly and hourly via the wrapper functions, plus the configuration options |
-| `python_notebooks/tcpyVPI_ERA5_example.ipynb` | Loading and computing in separate steps, with custom plots |
-| `python_notebooks/tcpyVPI_CESM2_example.ipynb` | Climate-model output instead of reanalysis |
-| `python_notebooks/tcpyVPI_ERA5climoanomaly_Jose.ipynb` | Climatologies and anomalies |
-| `github_tests/tcpyVPI_ERA5_from_github.ipynb` | Installing from GitHub rather than PyPI, and comparing output across versions or configurations |
+| [`python_notebooks/tcpyVPI_ERA5builtin_example.ipynb`](https://colab.research.google.com/github/drchavas/tcpyVPI/blob/main/python_notebooks/tcpyVPI_ERA5builtin_example.ipynb) | Shortest path: monthly and hourly via the wrapper functions, plus the configuration options |
+| [`python_notebooks/tcpyVPI_ERA5_example.ipynb`](https://colab.research.google.com/github/drchavas/tcpyVPI/blob/main/python_notebooks/tcpyVPI_ERA5_example.ipynb) | Loading and computing in separate steps, with custom plots |
+| [`python_notebooks/tcpyVPI_CESM2_example.ipynb`](https://colab.research.google.com/github/drchavas/tcpyVPI/blob/main/python_notebooks/tcpyVPI_CESM2_example.ipynb) | Climate-model output instead of reanalysis |
+| [`github_tests/tcpyVPI_ERA5_from_github.ipynb`](https://colab.research.google.com/github/drchavas/tcpyVPI/blob/main/github_tests/tcpyVPI_ERA5_from_github.ipynb) | Installing from GitHub rather than PyPI, and comparing output across versions or configurations |
 
 ## Output Variables
 
@@ -195,6 +222,7 @@ The main computation returns a dataset with:
 | `GPIv` | Ventilated Genesis Potential Index | - |
 | `vPI` | Ventilated Potential Intensity | m/s |
 | `PI` | Potential Intensity | m/s |
+| `T_o` | Outflow temperature from tcpyPI; NaN where PI is 0 or missing | K |
 | `VWS` | Vertical Wind Shear (200-850 hPa) | m/s |
 | `Chi` | Entropy Deficit | - |
 | `eta_c` | Capped absolute vorticity (850 hPa), **signed** | s⁻¹ |

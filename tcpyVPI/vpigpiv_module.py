@@ -306,7 +306,8 @@ def calculate_potential_intensity(
     ascent_flag: int = DEFAULT_ASCENT_FLAG,
     diss_flag: int = DEFAULT_DISS_FLAG,
     ptop: float = DEFAULT_PTOP,
-    verbose: bool = True
+    verbose: bool = True,
+    return_To: bool = False
 ) -> tuple:
     """
     Compute the maximum potential intensity (PI) for each grid point.
@@ -359,13 +360,18 @@ def calculate_potential_intensity(
         can rescue profiles that do not extend cleanly into the stratosphere.
     verbose : bool
         Print progress messages.
+    return_To : bool
+        Also return the outflow temperature. Default False, which keeps the
+        two-element return of earlier versions.
 
     Returns
     -------
     tuple
-        (vmax, asdeq) where:
+        (vmax, asdeq), or (vmax, asdeq, T_o) if ``return_To`` is True, where:
         - vmax: Maximum potential intensity in m/s
         - asdeq: Air–sea entropy disequilibrium term
+        - T_o: Outflow temperature from ``tcpyPI`` in K; NaN where PI is 0 or
+          missing, since there is no outflow without a storm
     """
     if verbose:
         print("  Calculating Potential Intensity (PI)...")
@@ -456,6 +462,13 @@ def calculate_potential_intensity(
     vmax.attrs = {'long_name': 'Potential Intensity', 'units': 'm/s'}
     asdeq.attrs = {'long_name': 'Air-Sea Entropy Disequilibrium Term', 'units': 'J/kg/K'}
 
+    if return_To:
+        # Outflow temperature of the storm's heat engine. Undefined without a
+        # storm, so NaN where PI is 0 (including the no-engine and cold-ocean
+        # columns above) or missing.
+        T_o = To_k.where(vmax > 0)
+        T_o.attrs = {'long_name': 'Outflow Temperature', 'units': 'K'}
+        return vmax, asdeq, T_o
     return vmax, asdeq
 
 
@@ -867,7 +880,8 @@ def compute_gpiv_from_dataset(
     -------
     xr.Dataset
         Dataset containing GPIv and all intermediate products:
-        PI, vPI, VWS, Chi, eta_c, ventilation_index, GPIv
+        PI, T_o (outflow temperature, K), vPI, VWS, Chi, eta_c,
+        eta_c_cyclonic, ventilation_index, GPIv
     """
     # Variable names
     u_var = 'U'
@@ -879,10 +893,10 @@ def compute_gpiv_from_dataset(
     sp_var = 'SP'
     
     # Calculate all components
-    PI, asdeq = calculate_potential_intensity(
+    PI, asdeq, T_o = calculate_potential_intensity(
         ds, sst_var, sp_var, t_var, q_var, V_reduc=1.0,
         CKCD=CKCD, ascent_flag=ascent_flag, diss_flag=diss_flag, ptop=ptop,
-        verbose=verbose
+        verbose=verbose, return_To=True
     )
     VWS = calculate_vws(ds, u_var, v_var,
                         p_top=shear_p_top, p_bot=shear_p_bot, verbose=verbose)
@@ -995,6 +1009,7 @@ def compute_gpiv_from_dataset(
         'GPIv': GPIv,
         'vPI': vPI,
         'PI': PI,
+        'T_o': T_o,
         'ventilation_index': ventilation_index,
         'VWS': VWS,
         'Chi': Chi,

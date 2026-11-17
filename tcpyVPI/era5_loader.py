@@ -1,36 +1,152 @@
 """
 ERA5 data loader for the tcpyVPI package.
 
-This module provides functions to load ERA5 reanalysis data from NCAR RDA
-THREDDS servers for both monthly mean (d633001) and hourly (d633000) datasets.
+This module loads ERA5 reanalysis data remotely, over OPeNDAP, from NCAR's
+GDEX THREDDS server (formerly RDA): the monthly mean dataset d633001 and the
+hourly dataset d633000.
+
+    monthly: {base}/d633001/e5.moda.an.{sfc|pl}/{year}/<file>
+    hourly:  {base}/d633000/e5.oper.an.{sfc|pl}/{yyyymm}/<file>
+
+with ``base = https://tds.gdex.ucar.edu/thredds/dodsC/files/g`` by default.
 
 The hourly dataset has different file structures for surface vs pressure level data:
 - Surface variables: monthly files containing all hours (YYYYMM0100_YYYYMM{last_day}23)
 - Pressure level variables: daily files containing 24 hours (YYYYMMDD00_YYYYMMDD23)
+
+Server location
+---------------
+NCAR has moved these files before (the 2026 RDA -> GDEX migration renamed the
+monthly folder from ``d633001_nc`` to ``d633001``). So that a future move does
+not break the package, the location is not hardcoded:
+
+* Each file is tried at a short list of known locations, in order, and the
+  first that works is remembered for the rest of the session. Transient network
+  errors are retried; "file not found" moves straight on to the next location.
+* The location can be overridden with :func:`set_era5_thredds_base` or the
+  environment variable ``TCPYVPI_ERA5_THREDDS``; an override is then the only
+  location tried.
+* If every location fails, :class:`ERA5DataUnavailableError` lists each URL
+  tried and how to override the location.
+
+Dataset pages: https://gdex.ucar.edu/datasets/d633001/ (monthly) and
+https://gdex.ucar.edu/datasets/d633000/ (hourly).
 
 Author: Jose Ocegueda Sanchez (2025)
 Based on original monthly data loader by Dan Chavas (2025)
 """
 
 import calendar
-from typing import Optional, Literal, Union
+import os
+import re
+import time
+from typing import Optional, Literal, Union, Callable, List, Tuple
 from datetime import datetime
 
 import xarray as xr
 import numpy as np
 
 # ============================================================================
-# THREDDS Base URLs
+# THREDDS server location
 # ============================================================================
-THREDDS_BASE = "https://thredds.rda.ucar.edu/thredds/dodsC/files/g"
+GDEX_THREDDS_BASE = "https://tds.gdex.ucar.edu/thredds/dodsC/files/g"
+RDA_THREDDS_BASE = "https://thredds.rda.ucar.edu/thredds/dodsC/files/g"   # alias of GDEX since 2026
+DEFAULT_THREDDS_BASE = GDEX_THREDDS_BASE
 
-# Monthly mean dataset (d633001)
-BASE_MMEAN_SFC = f"{THREDDS_BASE}/d633001_nc/e5.moda.an.sfc"
-BASE_MMEAN_PL = f"{THREDDS_BASE}/d633001_nc/e5.moda.an.pl"
+MONTHLY_FOLDER = "d633001"     # monthly means; was "d633001_nc" before the GDEX migration
+HOURLY_FOLDER = "d633000"      # hourly
 
-# Hourly dataset (d633000)
-BASE_HOURLY_SFC = f"{THREDDS_BASE}/d633000/e5.oper.an.sfc"
-BASE_HOURLY_PL = f"{THREDDS_BASE}/d633000/e5.oper.an.pl"
+ERA5_THREDDS_ENV_VAR = "TCPYVPI_ERA5_THREDDS"
+
+GDEX_MONTHLY_PAGE = "https://gdex.ucar.edu/datasets/d633001/"
+GDEX_HOURLY_PAGE = "https://gdex.ucar.edu/datasets/d633000/"
+
+# Known locations, tried in order: (base, dataset folder).
+_DEFAULT_CANDIDATES = {
+    'monthly': [
+        (GDEX_THREDDS_BASE, MONTHLY_FOLDER),
+        (RDA_THREDDS_BASE, MONTHLY_FOLDER),
+        (RDA_THREDDS_BASE, "d633001_nc"),
+    ],
+    'hourly': [
+        (GDEX_THREDDS_BASE, HOURLY_FOLDER),
+        (RDA_THREDDS_BASE, HOURLY_FOLDER),
+    ],
+}
+
+# Retry policy for transient failures at one location.
+MAX_ATTEMPTS = 3               # attempts per location
+BACKOFF_SECONDS = (2.0, 5.0)   # waits before the 2nd and 3rd attempt
+
+# Session state: an explicit override (set_era5_thredds_base) and the location
+# that last worked for each dataset.
+_override = None               # (base, monthly_folder, hourly_folder) or None
+_working = {}                  # {'monthly': (base, folder), 'hourly': (base, folder)}
+
+# Indirection so tests can substitute the opener and the clock.
+_open_dataset = xr.open_dataset
+_sleep = time.sleep
+
+
+class ERA5DataUnavailableError(OSError):
+    """Raised when an ERA5 file cannot be opened at any candidate location."""
+
+
+def set_era5_thredds_base(
+    url: Optional[str] = None,
+    monthly_folder: str = MONTHLY_FOLDER,
+    hourly_folder: str = HOURLY_FOLDER,
+) -> None:
+    """Point the ERA5 loader at a different THREDDS server.
+
+    Use this if NCAR moves the data again. While set, it is the only location
+    tried. Call with no argument to go back to the defaults (the environment
+    variable ``TCPYVPI_ERA5_THREDDS`` if set, otherwise the built-in list).
+
+    Parameters
+    ----------
+    url : str, optional
+        OPeNDAP base that contains the dataset folders, e.g.
+        ``"https://tds.gdex.ucar.edu/thredds/dodsC/files/g"``.
+    monthly_folder, hourly_folder : str
+        Dataset folder names under ``url``. Defaults ``"d633001"`` and
+        ``"d633000"``.
+
+    Examples
+    --------
+    >>> import tcpyVPI
+    >>> tcpyVPI.set_era5_thredds_base("https://new.server.ucar.edu/thredds/dodsC/files/g")
+    >>> tcpyVPI.set_era5_thredds_base()      # back to the defaults
+    """
+    global _override
+    _override = None if url is None else (url.rstrip('/'), monthly_folder, hourly_folder)
+    _working.clear()
+
+
+def get_era5_thredds_candidates(kind: Literal['monthly', 'hourly'] = 'monthly') -> List[Tuple[str, str]]:
+    """Return the (base, folder) locations that will be tried, in order.
+
+    An override from :func:`set_era5_thredds_base` takes precedence, then the
+    environment variable ``TCPYVPI_ERA5_THREDDS``, then the built-in list. A
+    location that has already worked this session is moved to the front.
+    """
+    if kind not in _DEFAULT_CANDIDATES:
+        raise ValueError(f"kind must be 'monthly' or 'hourly', not {kind!r}")
+    if _override is not None:
+        base, mfolder, hfolder = _override
+        return [(base, mfolder if kind == 'monthly' else hfolder)]
+    env = os.environ.get(ERA5_THREDDS_ENV_VAR, '').strip()
+    if env:
+        return [(env.rstrip('/'), MONTHLY_FOLDER if kind == 'monthly' else HOURLY_FOLDER)]
+    cands = list(_DEFAULT_CANDIDATES[kind])
+    if kind in _working and _working[kind] in cands:
+        cands.remove(_working[kind])
+        cands.insert(0, _working[kind])
+    return cands
+
+
+def _default_location(kind):
+    return get_era5_thredds_candidates(kind)[0]
 
 
 # ============================================================================
@@ -42,7 +158,7 @@ BASE_HOURLY_PL = f"{THREDDS_BASE}/d633000/e5.oper.an.pl"
 SURFACE_VARS = {
     'SSTK': ('034_sstk', 'sc'),   # Sea surface temperature
     'SP': ('134_sp', 'sc'),       # Surface pressure
-    'U10': ('165_10u', 'sc'),     # 10m U wind component  
+    'U10': ('165_10u', 'sc'),     # 10m U wind component
     'V10': ('166_10v', 'sc'),     # 10m V wind component
     'T2M': ('167_2t', 'sc'),      # 2m temperature
     'D2M': ('168_2d', 'sc'),      # 2m dewpoint temperature
@@ -60,13 +176,16 @@ PRESSURE_VARS = {
 # ============================================================================
 # URL Construction Functions
 # ============================================================================
+# Each builder takes the server base and dataset folder as arguments. If they
+# are omitted, the first candidate location is used.
 
-def _get_monthly_mean_url(var_name: str, year: int, is_surface: bool = True) -> str:
+def _get_monthly_mean_url(var_name: str, year: int, is_surface: bool = True,
+                          base: Optional[str] = None, folder: Optional[str] = None) -> str:
     """
     Construct THREDDS URL for ERA5 monthly mean data.
-    
+
     Monthly mean files contain all 12 months of a year in a single file.
-    
+
     Parameters
     ----------
     var_name : str
@@ -75,32 +194,31 @@ def _get_monthly_mean_url(var_name: str, year: int, is_surface: bool = True) -> 
         Year of data
     is_surface : bool
         True for surface variables, False for pressure level variables
-        
+    base, folder : str, optional
+        Server base and dataset folder; default to the first candidate location.
+
     Returns
     -------
     str
         Complete THREDDS URL for the variable
     """
-    if is_surface:
-        var_info = SURFACE_VARS[var_name]
-        base = BASE_MMEAN_SFC
-    else:
-        var_info = PRESSURE_VARS[var_name]
-        base = BASE_MMEAN_PL
-    
-    code, suffix = var_info
-    filename = f"e5.moda.an.{'sfc' if is_surface else 'pl'}.128_{code}.ll025{suffix}.{year}010100_{year}120100.nc"
-    
-    return f"{base}/{year}/{filename}"
+    if base is None or folder is None:
+        b, f = _default_location('monthly')
+        base, folder = base or b, folder or f
+    level = 'sfc' if is_surface else 'pl'
+    code, suffix = SURFACE_VARS[var_name] if is_surface else PRESSURE_VARS[var_name]
+    filename = f"e5.moda.an.{level}.128_{code}.ll025{suffix}.{year}010100_{year}120100.nc"
+    return f"{base}/{folder}/e5.moda.an.{level}/{year}/{filename}"
 
 
-def _get_hourly_surface_url(var_name: str, year: int, month: int) -> str:
+def _get_hourly_surface_url(var_name: str, year: int, month: int,
+                            base: Optional[str] = None, folder: Optional[str] = None) -> str:
     """
     Construct THREDDS URL for ERA5 hourly surface data.
-    
+
     Surface files contain an entire month of hourly data.
-    Path structure: BASE_URL/YYYYMM/filename.nc
-    
+    Path structure: {base}/{folder}/e5.oper.an.sfc/YYYYMM/filename.nc
+
     Parameters
     ----------
     var_name : str
@@ -109,30 +227,32 @@ def _get_hourly_surface_url(var_name: str, year: int, month: int) -> str:
         Year of data
     month : int
         Month of data (1-12)
-        
+    base, folder : str, optional
+        Server base and dataset folder; default to the first candidate location.
+
     Returns
     -------
     str
         Complete THREDDS URL for the variable
     """
+    if base is None or folder is None:
+        b, f = _default_location('hourly')
+        base, folder = base or b, folder or f
     code, suffix = SURFACE_VARS[var_name]
-    year_str = str(year)
-    month_str = str(month).zfill(2)
+    ym = f"{year}{month:02d}"
     last_day = calendar.monthrange(year, month)[1]
-    
-    filename = (f"e5.oper.an.sfc.128_{code}.ll025{suffix}."
-                f"{year_str}{month_str}0100_{year_str}{month_str}{last_day:02d}23.nc")
-    
-    return f"{BASE_HOURLY_SFC}/{year_str}{month_str}/{filename}"
+    filename = f"e5.oper.an.sfc.128_{code}.ll025{suffix}.{ym}0100_{ym}{last_day:02d}23.nc"
+    return f"{base}/{folder}/e5.oper.an.sfc/{ym}/{filename}"
 
 
-def _get_hourly_pressure_url(var_name: str, year: int, month: int, day: int) -> str:
+def _get_hourly_pressure_url(var_name: str, year: int, month: int, day: int,
+                             base: Optional[str] = None, folder: Optional[str] = None) -> str:
     """
     Construct THREDDS URL for ERA5 hourly pressure level data.
-    
+
     Pressure level files contain a single day of hourly data (24 hours).
-    Path structure: BASE_URL/YYYYMM/filename.nc
-    
+    Path structure: {base}/{folder}/e5.oper.an.pl/YYYYMM/filename.nc
+
     Parameters
     ----------
     var_name : str
@@ -143,21 +263,91 @@ def _get_hourly_pressure_url(var_name: str, year: int, month: int, day: int) -> 
         Month of data (1-12)
     day : int
         Day of data (1-31)
-        
+    base, folder : str, optional
+        Server base and dataset folder; default to the first candidate location.
+
     Returns
     -------
     str
         Complete THREDDS URL for the variable
     """
+    if base is None or folder is None:
+        b, f = _default_location('hourly')
+        base, folder = base or b, folder or f
     code, suffix = PRESSURE_VARS[var_name]
-    year_str = str(year)
-    month_str = str(month).zfill(2)
-    day_str = str(day).zfill(2)
-    
-    filename = (f"e5.oper.an.pl.128_{code}.ll025{suffix}."
-                f"{year_str}{month_str}{day_str}00_{year_str}{month_str}{day_str}23.nc")
-    
-    return f"{BASE_HOURLY_PL}/{year_str}{month_str}/{filename}"
+    ymd = f"{year}{month:02d}{day:02d}"
+    filename = f"e5.oper.an.pl.128_{code}.ll025{suffix}.{ymd}00_{ymd}23.nc"
+    return f"{base}/{folder}/e5.oper.an.pl/{ymd[:6]}/{filename}"
+
+
+# ============================================================================
+# Opening a file, with fallback and retries
+# ============================================================================
+
+_NOT_FOUND_ERRNO = -90        # NetCDF: file not found
+_TRANSIENT_ERRNO = -68        # NetCDF: I/O failure (often curl/SSL underneath)
+_NOT_FOUND_RE = re.compile(r"file ?not ?found|no such file|\b404\b")
+_TRANSIENT_RE = re.compile(r"i/o failure|ssl|timed out|timeout|connection (?:reset|refused|aborted)|"
+                           r"temporary failure|curl error|could(?:n't| not) (?:connect|resolve)")
+
+
+def _classify(exc: BaseException, url: str = '') -> str:
+    """'not_found', 'transient' or 'other' for an exception from the opener.
+
+    Uses the NetCDF error number when there is one; otherwise the message, with
+    the URL removed first so that a date such as 20220404 is not read as a 404.
+    """
+    errno = getattr(exc, 'errno', None)
+    if errno == _NOT_FOUND_ERRNO:
+        return 'not_found'
+    if errno == _TRANSIENT_ERRNO:
+        return 'transient'
+    msg = str(exc).replace(url, '').lower() if url else str(exc).lower()
+    if _NOT_FOUND_RE.search(msg):
+        return 'not_found'
+    if _TRANSIENT_RE.search(msg):
+        return 'transient'
+    return 'other'
+
+
+def _open_era5(kind: Literal['monthly', 'hourly'], url_for: Callable[[str, str], str]) -> xr.Dataset:
+    """Open one ERA5 file, trying each candidate location in turn.
+
+    ``url_for(base, folder)`` builds the file's URL at a location. Transient
+    failures are retried up to ``MAX_ATTEMPTS`` times with a short backoff;
+    "file not found" and other errors move straight on to the next location.
+    The first location that works is remembered for the rest of the session.
+    """
+    tried = []
+    for base, folder in get_era5_thredds_candidates(kind):
+        url = url_for(base, folder)
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                ds = _open_dataset(url)
+            except (OSError, RuntimeError, ValueError) as exc:
+                kind_of_error = _classify(exc, url)
+                if kind_of_error == 'transient' and attempt < MAX_ATTEMPTS - 1:
+                    _sleep(BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)])
+                    continue
+                label = {'not_found': 'not found', 'transient': 'network error',
+                         'other': 'error'}[kind_of_error]
+                tried.append(f"{url}\n      -> {label} after {attempt + 1} attempt(s): {exc}")
+                break
+            else:
+                _working[kind] = (base, folder)
+                return ds
+
+    page = GDEX_MONTHLY_PAGE if kind == 'monthly' else GDEX_HOURLY_PAGE
+    raise ERA5DataUnavailableError(
+        f"Could not open ERA5 {kind} data at any known location. Tried:\n  "
+        + "\n  ".join(tried)
+        + "\n\nIf every location says 'not found', NCAR may have moved the data. "
+        f"Check the dataset page ({page}) for the current OPeNDAP location, then "
+        "point tcpyVPI at it with\n"
+        "    tcpyVPI.set_era5_thredds_base('https://<server>/thredds/dodsC/files/g')\n"
+        f"or the environment variable {ERA5_THREDDS_ENV_VAR}. If the errors are network "
+        "errors, the server may be down or unreachable from here; try again later."
+    )
 
 
 # ============================================================================
@@ -168,7 +358,8 @@ def load_era5_monthly(year: int, month: int, verbose: bool = True) -> xr.Dataset
     """
     Load ERA5 monthly mean data for GPIv calculation.
     
-    Loads variables from the monthly mean dataset (d633001) via THREDDS.
+    Loads variables from the monthly mean dataset (d633001) via THREDDS; see
+    the module docstring for where the files are read from.
     All 12 months are in a single file; this function extracts the specified month.
     
     Parameters
@@ -193,17 +384,17 @@ def load_era5_monthly(year: int, month: int, verbose: bool = True) -> xr.Dataset
     
     # Load surface variables
     for var_name in ['SSTK', 'SP']:
-        url = _get_monthly_mean_url(var_name, year, is_surface=True)
         if verbose:
             print(f"  Loading {var_name}...")
-        datasets[var_name] = xr.open_dataset(url)
+        datasets[var_name] = _open_era5(
+            'monthly', lambda b, f, v=var_name: _get_monthly_mean_url(v, year, True, b, f))
     
     # Load pressure level variables
     for var_name in ['T', 'Q', 'U', 'V', 'VO']:
-        url = _get_monthly_mean_url(var_name, year, is_surface=False)
         if verbose:
             print(f"  Loading {var_name}...")
-        datasets[var_name] = xr.open_dataset(url)
+        datasets[var_name] = _open_era5(
+            'monthly', lambda b, f, v=var_name: _get_monthly_mean_url(v, year, False, b, f))
     
     # Extract the specified month (0-indexed)
     idx = month - 1
@@ -217,7 +408,7 @@ def load_era5_monthly(year: int, month: int, verbose: bool = True) -> xr.Dataset
         datasets['U'].U.isel(time=idx),
         datasets['V'].V.isel(time=idx),
         datasets['VO'].VO.isel(time=idx),
-    ])
+    ], compat='override', join='outer')   # explicit: silences xarray's FutureWarning; the variables do not overlap
     
     if verbose:
         print("  Data loading complete.")
@@ -235,7 +426,8 @@ def load_era5_hourly(
     """
     Load ERA5 hourly data for GPIv calculation.
     
-    Loads variables from the hourly dataset (d633000) via THREDDS.
+    Loads variables from the hourly dataset (d633000) via THREDDS; see the
+    module docstring for where the files are read from.
     Surface variables are in monthly files, pressure level variables in daily files.
     
     Parameters
@@ -276,10 +468,10 @@ def load_era5_hourly(
     
     # Load surface variables (monthly files)
     for var_name in ['SSTK', 'SP']:
-        url = _get_hourly_surface_url(var_name, year, month)
         if verbose:
             print(f"  Loading {var_name} (surface, monthly file)...")
-        ds = xr.open_dataset(url)
+        ds = _open_era5(
+            'hourly', lambda b, f, v=var_name: _get_hourly_surface_url(v, year, month, b, f))
         
         # Select the specific day/hour
         if hour is not None:
@@ -292,10 +484,10 @@ def load_era5_hourly(
     
     # Load pressure level variables (daily files)
     for var_name in ['T', 'Q', 'U', 'V', 'VO']:
-        url = _get_hourly_pressure_url(var_name, year, month, day)
         if verbose:
             print(f"  Loading {var_name} (pressure level, daily file)...")
-        ds = xr.open_dataset(url)
+        ds = _open_era5(
+            'hourly', lambda b, f, v=var_name: _get_hourly_pressure_url(v, year, month, day, b, f))
         
         # Select specific hour if requested
         if hour is not None:
@@ -331,7 +523,7 @@ def load_era5_hourly(
             if data_vars:
                 merged_vars.append(ds[data_vars[0]].rename(var_name))
     
-    result = xr.merge(merged_vars)
+    result = xr.merge(merged_vars, compat='override', join='outer')   # explicit, as in load_era5_monthly
     
     if verbose:
         print("  Data loading complete.")
